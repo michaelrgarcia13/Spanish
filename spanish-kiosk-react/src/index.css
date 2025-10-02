@@ -2,6 +2,26 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Prevent text selection and touch callouts on mobile */
+html, body, #root {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+button, [role="button"] {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Allow text selection in message content for accessibility */
+.selectable {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
 button {
   border-radius: 8px;
   border: 1px solid transparent;

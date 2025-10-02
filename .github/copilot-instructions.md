@@ -25,10 +25,10 @@
 - [x] Ensure Documentation is Complete
 	Created comprehensive README.md with setup and deployment instructions
 
-## Project Status: ✅ COMPLETE & COMMITTED TO GIT
+## Project Status: ✅ COMPLETE & DEPLOYED TO IPHONE
 
-**Git Repository**: Initialized with commit `cd8c3ce`
-**API Key**: Configured in .env file (excluded from git)
-**Servers**: Ready to run with VS Code tasks
-**Documentation**: Complete setup and deployment guides
-**Next Steps**: Test locally or deploy for iPhone compatibility
+**Git Repository**: https://github.com/michaelrgarcia13/Spanish (commit `24a013c`)
+**Live App**: https://spanish-red.vercel.app/
+**Backend API**: https://spanish-xcs6.onrender.com
+**iPhone Compatible**: ✅ HTTPS enabled for microphone access
+**Ready to Use**: Test on iPhone Safari or add to Home Screen

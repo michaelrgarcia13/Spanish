@@ -23,18 +23,27 @@ const {
 app.post('/chat', async (req, res) => {
   try {
     console.log('Chat request received:', req.body);
-    const { messages } = req.body;
+    const { messages, translate = false } = req.body;
 
     const systemPrompt = {
       role: "system",
       content:
         "Eres un tutor de español amable para principiantes (A1–A2) con enfoque latinoamericano. " +
-        "Responde siempre en español sencillo, claro y breve (2–3 oraciones). " +
-        "Primero refuerza lo que el estudiante dijo; luego ofrece una corrección natural al estilo latinoamericano " +
-        "con una línea que empiece con 'Corrección:' (usa vocabulario y giros comunes en América Latina). " +
-        "Después, continúa la conversación con una pregunta sencilla relacionada. " +
-        "Evita explicaciones largas a menos que el estudiante lo pida. " +
-        "Si el usuario dice o escribe 'traduce', añade una línea final en inglés con una traducción útil."
+        "Usa un tono cálido y motivador. Si corriges, que sea breve y amable. " +
+        "1) Si la frase del estudiante funciona bien, NO des corrección; solo valida/afirma brevemente con frases como '¡Perfecto!' o '¡Muy bien!'. " +
+        "2) Si requiere mejora, incluye una corrección natural con vocabulario latinoamericano. " +
+        "3) Siempre continúa con una pregunta sencilla relacionada. " +
+        "4) Devuelve SIEMPRE un JSON válido con este esquema exacto:\n" +
+        JSON.stringify({
+          "ok": true,
+          "ack_es": "string - Acknowledgment brief and positive",
+          "correction_es": "string or null - Only if correction needed",
+          "reply_es": "string - Main response in Spanish",
+          "question_es": "string - Follow-up question",
+          "needs_correction": false,
+          "translation_en": "string or null - English translation if requested"
+        }) + "\n" +
+        (translate ? "Incluye translation_en con traducción útil al inglés." : "Pon translation_en como null.")
     };
 
     const allMessages = [systemPrompt, ...messages];
@@ -48,8 +57,9 @@ app.post('/chat', async (req, res) => {
       body: JSON.stringify({
         model: OPENAI_CHAT_MODEL,
         messages: allMessages,
-        max_tokens: 500,
-        temperature: 0.7
+        max_tokens: 600,
+        temperature: 0.7,
+        response_format: { type: "json_object" }
       })
     });
 
@@ -58,9 +68,27 @@ app.post('/chat', async (req, res) => {
       return res.status(r.status).send(await r.text());
     }
     const data = await r.json();
-    const text = data.choices?.[0]?.message?.content || '';
-    console.log('Chat response sent:', text);
-    res.json({ reply: text });
+    const rawContent = data.choices?.[0]?.message?.content || '{}';
+    
+    let parsed;
+    try {
+      parsed = JSON.parse(rawContent);
+    } catch (e) {
+      console.error('JSON parse error:', e);
+      // Fallback response if JSON parsing fails
+      parsed = { 
+        ok: true, 
+        ack_es: "¡Muy bien!", 
+        correction_es: null, 
+        reply_es: rawContent, 
+        question_es: "¿Puedes repetir eso?", 
+        needs_correction: false, 
+        translation_en: translate ? rawContent : null 
+      };
+    }
+
+    console.log('Chat response sent:', parsed);
+    res.json(parsed);
   } catch (e) {
     console.error('Chat error:', e);
     res.status(500).json({ error: String(e) });
