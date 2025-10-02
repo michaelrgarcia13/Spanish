@@ -13,7 +13,7 @@ const upload = multer({ storage: multer.memoryStorage() });
 
 const {
   OPENAI_API_KEY,
-  OPENAI_CHAT_MODEL = 'gpt-4o-mini',
+  OPENAI_CHAT_MODEL = 'gpt-4o',
   OPENAI_STT_MODEL  = 'whisper-1',
   OPENAI_TTS_MODEL  = 'tts-1',
   OPENAI_TTS_VOICE  = 'alloy'

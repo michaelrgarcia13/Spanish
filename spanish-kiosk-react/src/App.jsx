@@ -68,27 +68,30 @@ async function speakServerTTS(text, apiBase) {
 const isiOS = typeof navigator !== 'undefined' && /iP(hone|ad|od)/.test(navigator.userAgent);
 
 // UI Components
-function Section({ label, text, onSpeak }) {
+function Section({ label, text, onSpeak, isUser = false }) {
   if (!text) return null;
+  
+  const baseClasses = "max-w-[85%] rounded-2xl px-4 py-3 leading-relaxed shadow-lg select-none cursor-pointer transition-all duration-200 hover:shadow-xl";
+  const userClasses = "self-end bg-blue-500 text-white hover:bg-blue-600";
+  const assistantClasses = "self-start bg-gray-100 text-gray-800 hover:bg-gray-200";
+  
   return (
     <div
-      className="rounded-2xl px-3 py-2 leading-relaxed shadow self-start bg-white/10 backdrop-blur-sm text-white ring-1 ring-white/20 select-none cursor-pointer hover:bg-white/15 transition-colors"
+      className={`${baseClasses} ${isUser ? userClasses : assistantClasses}`}
       onClick={() => onSpeak(text)}
       role="button"
       tabIndex={0}
       onKeyDown={(e) => e.key === "Enter" && onSpeak(text)}
     >
-      {label ? <div className="text-xs text-blue-200 mb-1 font-medium">{label}</div> : null}
+      {label && !isUser ? <div className="text-xs text-gray-500 mb-1 font-medium uppercase tracking-wide">{label}</div> : null}
       <div className="whitespace-pre-wrap">{text}</div>
     </div>
   );
 }
 
-function UserBubble({ text }) {
+function UserBubble({ text, onSpeak }) {
   return (
-    <div className="max-w-[90%] rounded-2xl px-3 py-2 leading-relaxed shadow self-end bg-blue-600 text-white select-none">
-      {text}
-    </div>
+    <Section text={text} onSpeak={onSpeak} isUser={true} />
   );
 }
 
@@ -114,6 +117,16 @@ function App() {
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
   const streamRef = useRef(null);
+  const messagesEndRef = useRef(null);
+
+  // Auto-scroll to bottom when new messages arrive
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages]);
 
   const startRecording = useCallback(async () => {
     try {
@@ -236,14 +249,21 @@ function App() {
 
       setMessages(prev => [...prev, assistantMessage]);
 
-      // Auto-speak the main content (reply + question), not the ack/correction by default
+      // Auto-speak the main content (reply + question) with better mobile support
       const toSpeak = [data.reply_es, data.question_es].filter(Boolean).join(' ');
       if (toSpeak) {
-        if (useServerTTS) {
-          await speakServerTTS(toSpeak, API_BASE);
-        } else {
-          await speakBrowserSpanish(toSpeak);
-        }
+        // Add a small delay to ensure the UI updates first, then speak
+        setTimeout(async () => {
+          try {
+            if (useServerTTS) {
+              await speakServerTTS(toSpeak, API_BASE);
+            } else {
+              await speakBrowserSpanish(toSpeak);
+            }
+          } catch (e) {
+            console.log('Auto-TTS failed:', e);
+          }
+        }, 300);
       }
 
     } catch (err) {
@@ -280,141 +300,126 @@ function App() {
   }, []);
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-900 via-purple-900 to-indigo-900 text-white">
-      <div className="container mx-auto px-4 py-8 max-w-2xl">
-        <header className="text-center mb-8">
-          <h1 className="text-4xl font-bold mb-2">🇲🇽 Práctica de Español</h1>
-          <p className="text-blue-200">Tutor de conversación latinoamericano</p>
-        </header>
-
-        {/* Controls */}
-        <div className="bg-white/10 backdrop-blur-md rounded-lg p-6 mb-6">
-          <div className="flex flex-col gap-3 mb-4">
-            <div className="flex items-center justify-between">
-              <label className="flex items-center gap-2 text-xs select-none cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={useServerTTS}
-                  onChange={(e) => setUseServerTTS(e.target.checked)}
-                  className="h-4 w-4 rounded"
-                />
-                <span>Usar TTS del servidor</span>
-                <span className="text-blue-300 text-xs">ⓘ</span>
-              </label>
-              
-              <button
-                onClick={clearConversation}
-                className="px-3 py-1 bg-red-500/20 hover:bg-red-500/30 rounded-lg text-xs transition-colors"
-              >
-                Limpiar
-              </button>
-            </div>
-            
-            <label className="flex items-center gap-2 text-xs select-none cursor-pointer">
+    <div className="h-screen bg-gray-50 flex flex-col">
+      {/* Header */}
+      <header className="bg-white shadow-sm border-b px-4 py-3 flex-shrink-0">
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-xl font-semibold text-gray-800">🇲🇽 Práctica de Español</h1>
+          </div>
+          <div className="flex items-center gap-4">
+            <label className="flex items-center gap-2 text-xs text-gray-600 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={useServerTTS}
+                onChange={(e) => setUseServerTTS(e.target.checked)}
+                className="h-3 w-3 rounded"
+              />
+              <span>Server TTS</span>
+            </label>
+            <label className="flex items-center gap-2 text-xs text-gray-600 cursor-pointer">
               <input
                 type="checkbox"
                 checked={showEnglish}
                 onChange={(e) => setShowEnglish(e.target.checked)}
-                className="h-4 w-4 rounded"
+                className="h-3 w-3 rounded"
               />
-              <span>Mostrar traducción en inglés</span>
+              <span>English</span>
             </label>
-          </div>
-
-          {/* Recording Button */}
-          <div className="text-center">
             <button
-              onMouseDown={startRecording}
-              onMouseUp={stopRecording}
-              onTouchStart={startRecording}
-              onTouchEnd={stopRecording}
-              disabled={isProcessing}
-              className={`
-                w-32 h-32 rounded-full text-4xl transition-all duration-200 transform
-                ${isRecording 
-                  ? 'bg-red-500 scale-110 animate-pulse' 
-                  : 'bg-green-500 hover:bg-green-400 hover:scale-105'
-                }
-                ${isProcessing ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}
-                shadow-lg active:scale-95
-              `}
+              onClick={clearConversation}
+              className="text-xs px-2 py-1 bg-red-100 text-red-600 rounded hover:bg-red-200 transition-colors"
             >
-              {isProcessing ? '⌛' : isRecording ? '🔴' : '🎙️'}
+              Clear
             </button>
-            
-            <p className="mt-4 text-sm text-blue-200">
-              {isProcessing 
-                ? 'Procesando...' 
-                : isRecording 
-                  ? 'Grabando... (suelta para enviar)'
-                  : 'Mantén presionado para hablar'
+          </div>
+        </div>
+      </header>
+
+      {/* Chat Messages Container - Scrollable */}
+      <div className="flex-1 overflow-y-auto px-4 py-4">
+        <div className="max-w-4xl mx-auto">
+          <div className="flex flex-col gap-3">
+            {messages.map((message, index) => {
+              if (message.role === 'user') {
+                return <UserBubble key={index} text={message.text} onSpeak={speak} />;
               }
-            </p>
-          </div>
 
-          {/* Current Transcript */}
+              return (
+                <div key={index} className="flex flex-col gap-2">
+                  <Section text={message.ack_es} onSpeak={speak} />
+                  {message.correction_es && (
+                    <Section 
+                      label="Corrección" 
+                      text={message.correction_es} 
+                      onSpeak={speak} 
+                    />
+                  )}
+                  <Section text={message.reply_es} onSpeak={speak} />
+                  <Section text={message.question_es} onSpeak={speak} />
+                  {showEnglish && message.translation_en && (
+                    <Section 
+                      label="English" 
+                      text={message.translation_en} 
+                      onSpeak={async (text) => await speakServerTTS(text, API_BASE)} 
+                    />
+                  )}
+                </div>
+              );
+            })}
+            {/* Invisible element to scroll to */}
+            <div ref={messagesEndRef} />
+          </div>
+        </div>
+      </div>
+
+      {/* Current Status/Error Bar */}
+      {(transcript || error) && (
+        <div className="bg-white border-t px-4 py-2 flex-shrink-0">
           {transcript && (
-            <div className="mt-4 p-3 bg-blue-500/20 rounded-lg">
-              <p className="text-sm text-blue-200 mb-1">Tu dijiste:</p>
-              <p className="text-white">{transcript}</p>
+            <div className="max-w-4xl mx-auto">
+              <p className="text-sm text-gray-600">You said: <span className="text-gray-800 font-medium">{transcript}</span></p>
             </div>
           )}
-
-          {/* Error Display */}
           {error && (
-            <div className="mt-4 p-3 bg-red-500/20 rounded-lg border border-red-500/30">
-              <p className="text-red-200 text-sm">{error}</p>
+            <div className="max-w-4xl mx-auto">
+              <p className="text-sm text-red-600">{error}</p>
             </div>
           )}
         </div>
+      )}
 
-        {/* Conversation History */}
-        <div className="space-y-4">
-          {messages.map((message, index) => {
-            if (message.role === 'user') {
-              return <UserBubble key={index} text={message.text} />;
+      {/* Bottom Microphone Button */}
+      <div className="bg-white border-t px-4 py-6 flex-shrink-0">
+        <div className="max-w-4xl mx-auto text-center">
+          <button
+            onMouseDown={startRecording}
+            onMouseUp={stopRecording}
+            onTouchStart={startRecording}
+            onTouchEnd={stopRecording}
+            disabled={isProcessing}
+            className={`
+              w-24 h-24 rounded-full text-6xl transition-all duration-200 transform shadow-xl
+              ${isRecording 
+                ? 'bg-red-500 scale-110 animate-pulse shadow-red-500/50' 
+                : 'bg-blue-500 hover:bg-blue-600 hover:scale-105 shadow-blue-500/30'
+              }
+              ${isProcessing ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}
+              active:scale-95 text-white
+            `}
+          >
+            {isProcessing ? '⌛' : isRecording ? '⏹️' : '🎙️'}
+          </button>
+          
+          <p className="mt-3 text-sm text-gray-600">
+            {isProcessing 
+              ? 'Processing...' 
+              : isRecording 
+                ? 'Recording... (release to send)'
+                : 'Hold to speak in Spanish'
             }
-
-            return (
-              <div key={index} className="flex flex-col gap-2">
-                <Section text={message.ack_es} onSpeak={speak} />
-                {message.correction_es && (
-                  <Section 
-                    label="Corrección" 
-                    text={message.correction_es} 
-                    onSpeak={speak} 
-                  />
-                )}
-                <Section text={message.reply_es} onSpeak={speak} />
-                <Section text={message.question_es} onSpeak={speak} />
-                {showEnglish && message.translation_en && (
-                  <Section 
-                    label="English" 
-                    text={message.translation_en} 
-                    onSpeak={async (text) => await speakServerTTS(text, API_BASE)} 
-                  />
-                )}
-              </div>
-            );
-          })}
+          </p>
         </div>
-
-        {/* Instructions */}
-        {messages.length === 0 && (
-          <div className="mt-8 text-center text-blue-200">
-            <h3 className="text-lg font-semibold mb-2">¿Cómo funciona?</h3>
-            <ul className="text-sm space-y-1 max-w-md mx-auto">
-              <li>1. Mantén presionado el micrófono</li>
-              <li>2. Habla en español</li>
-              <li>3. Suelta para enviar</li>
-              <li>4. Recibe corrección + pregunta</li>
-              <li>5. Escucha la respuesta</li>
-            </ul>
-            <p className="mt-4 text-xs opacity-75">
-              Funciona mejor con frases completas y audio claro
-            </p>
-          </div>
-        )}
       </div>
     </div>
   );
