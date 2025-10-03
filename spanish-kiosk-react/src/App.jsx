@@ -113,6 +113,8 @@ function App() {
   const [useServerTTS, setUseServerTTS] = useState(isiOS); // Default ON for iOS
   const [showEnglish, setShowEnglish] = useState(false);
   const [error, setError] = useState('');
+  const [showInstallPrompt, setShowInstallPrompt] = useState(false);
+  const [deferredPrompt, setDeferredPrompt] = useState(null);
 
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
@@ -127,6 +129,42 @@ function App() {
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
+
+  // PWA Install Prompt
+  useEffect(() => {
+    const handleBeforeInstallPrompt = (e) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+      setShowInstallPrompt(true);
+    };
+
+    const handleAppInstalled = () => {
+      console.log('PWA was installed');
+      setShowInstallPrompt(false);
+      setDeferredPrompt(null);
+    };
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    window.addEventListener('appinstalled', handleAppInstalled);
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+      window.removeEventListener('appinstalled', handleAppInstalled);
+    };
+  }, []);
+
+  const handleInstallClick = () => {
+    if (deferredPrompt) {
+      deferredPrompt.prompt();
+      deferredPrompt.userChoice.then((choiceResult) => {
+        if (choiceResult.outcome === 'accepted') {
+          console.log('User accepted the install prompt');
+        }
+        setDeferredPrompt(null);
+        setShowInstallPrompt(false);
+      });
+    }
+  };
 
   const startRecording = useCallback(async () => {
     try {
@@ -308,6 +346,14 @@ function App() {
             <h1 className="text-xl font-semibold text-gray-800">🇲🇽 Práctica de Español</h1>
           </div>
           <div className="flex items-center gap-4">
+            {showInstallPrompt && (
+              <button
+                onClick={handleInstallClick}
+                className="text-xs px-2 py-1 bg-blue-100 text-blue-600 rounded hover:bg-blue-200 transition-colors font-medium"
+              >
+                📱 Install App
+              </button>
+            )}
             <label className="flex items-center gap-2 text-xs text-gray-600 cursor-pointer">
               <input
                 type="checkbox"

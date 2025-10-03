@@ -1,0 +1,30 @@
+<svg width="192" height="192" viewBox="0 0 192 192" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background -->
+  <rect x="0" y="0" width="192" height="192" fill="#3b82f6" rx="24"/>
+  
+  <!-- Main Circle -->
+  <circle cx="96" cy="96" r="60" fill="white" opacity="0.2"/>
+  
+  <!-- Microphone Icon -->
+  <g transform="translate(96, 96)">
+    <!-- Mic body -->
+    <rect x="-12" y="-24" width="24" height="32" rx="12" fill="white"/>
+    <!-- Mic stand -->
+    <rect x="-2" y="8" width="4" height="20" fill="white"/>
+    <!-- Mic base -->
+    <rect x="-16" y="28" width="32" height="4" rx="2" fill="white"/>
+    <!-- Sound waves -->
+    <path d="M-35,-8 C-35,-20 -28,-28 -20,-28" stroke="white" stroke-width="3" fill="none" opacity="0.8"/>
+    <path d="M35,-8 C35,-20 28,-28 20,-28" stroke="white" stroke-width="3" fill="none" opacity="0.8"/>
+    <path d="M-40,0 C-40,-16 -30,-28 -16,-28" stroke="white" stroke-width="3" fill="none" opacity="0.6"/>
+    <path d="M40,0 C40,-16 30,-28 16,-28" stroke="white" stroke-width="3" fill="none" opacity="0.6"/>
+  </g>
+  
+  <!-- Spanish Flag Colors -->
+  <rect x="16" y="16" width="160" height="8" fill="#c41e3a"/>
+  <rect x="16" y="168" width="160" height="8" fill="#c41e3a"/>
+  <rect x="16" y="24" width="160" height="144" fill="#ffc400"/>
+  
+  <!-- Text -->
+  <text x="96" y="45" font-family="Arial, sans-serif" font-size="18" font-weight="bold" text-anchor="middle" fill="white">ES</text>
+</svg>
