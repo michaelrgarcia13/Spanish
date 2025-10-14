@@ -2,27 +2,30 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Prevent text selection and touch callouts on mobile for UI elements only */
+/* Basic mobile optimizations without blocking text selection */
 html, body {
-  -webkit-touch-callout: none;
   -webkit-tap-highlight-color: transparent;
-  touch-action: manipulation;
 }
 
-#root {
+/* Only prevent selection on buttons */
+button {
+  -webkit-user-select: none !important;
+  user-select: none !important;
+  -webkit-touch-callout: none;
+}
+
+/* Explicitly allow text selection everywhere else */
+* {
   -webkit-user-select: text;
   user-select: text;
 }
 
-button, [role="button"] {
-  -webkit-user-select: none;
-  user-select: none;
-}
-
-/* Allow text selection in message content */
-.message-content {
-  -webkit-user-select: text !important;
-  user-select: text !important;
+/* Override for the microphone button specifically */
+.mic-button {
+  -webkit-user-select: none !important;
+  user-select: none !important;
+  -webkit-touch-callout: none !important;
+  touch-action: manipulation;
 }
 
 button {

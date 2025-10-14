@@ -81,7 +81,7 @@ function MessageBubble({ text, isUser, label, onSpeak }) {
         )}
         <div
           className={`
-            px-4 py-3 shadow-md transition-all duration-200 message-content
+            px-4 py-3 shadow-md transition-all duration-200
             ${isUser 
               ? 'bg-blue-500 text-white rounded-2xl rounded-br-md' 
               : 'bg-gray-200 text-gray-800 rounded-2xl rounded-bl-md'
@@ -89,12 +89,15 @@ function MessageBubble({ text, isUser, label, onSpeak }) {
             hover:shadow-lg
           `}
           onDoubleClick={(e) => {
-            e.preventDefault();
-            onSpeak(text);
+            // Only trigger speak if no text is selected
+            const selection = window.getSelection();
+            if (!selection || selection.toString().length === 0) {
+              onSpeak(text);
+            }
           }}
-          title="Double-click to speak aloud"
+          title="Double-click to speak aloud (if no text selected)"
         >
-          <div className="whitespace-pre-wrap leading-relaxed text-sm md:text-base message-content">
+          <div className="whitespace-pre-wrap leading-relaxed text-sm md:text-base">
             {text}
           </div>
         </div>
@@ -612,15 +615,14 @@ function App() {
             onTouchCancel={(e) => isRecording && stopRecording(e)}
             disabled={isProcessing}
             className={`
-              w-40 h-16 rounded-full text-4xl transition-all duration-200 transform shadow-xl
+              mic-button w-40 h-16 rounded-full text-4xl transition-all duration-200 transform shadow-xl
               ${isRecording 
                 ? 'bg-red-500 scale-105 animate-pulse shadow-red-500/50' 
                 : 'bg-blue-500 hover:bg-blue-600 hover:scale-105 shadow-blue-500/30'
               }
               ${isProcessing ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}
-              active:scale-95 text-white font-medium touch-none select-none
+              active:scale-95 text-white font-medium
             `}
-            style={{ WebkitTouchCallout: 'none', WebkitUserSelect: 'none' }}
           >
             {isProcessing ? '⌛' : isRecording ? '⏹️' : '🎙️'}
           </button>
