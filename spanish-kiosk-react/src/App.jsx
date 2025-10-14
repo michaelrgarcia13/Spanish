@@ -120,6 +120,7 @@ function App() {
   const [error, setError] = useState('');
   const [showInstallPrompt, setShowInstallPrompt] = useState(false);
   const [deferredPrompt, setDeferredPrompt] = useState(null);
+  const [micPermissionGranted, setMicPermissionGranted] = useState(false);
 
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
@@ -158,8 +159,30 @@ function App() {
     };
   }, []);
 
-  // Cleanup microphone on unmount
+  // Request microphone permission on mount
   useEffect(() => {
+    const requestMicPermission = async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            sampleRate: 16000,
+            channelCount: 1,
+            echoCancellation: true,
+            noiseSuppression: true,
+          }
+        });
+        streamRef.current = stream;
+        setMicPermissionGranted(true);
+        console.log('Microphone permission granted and stream ready');
+      } catch (err) {
+        console.error('Microphone permission denied:', err);
+        setError('Microphone permission denied. Please enable it in your browser settings.');
+      }
+    };
+
+    requestMicPermission();
+
+    // Cleanup on unmount
     return () => {
       if (streamRef.current) {
         streamRef.current.getTracks().forEach(track => track.stop());
@@ -197,6 +220,13 @@ function App() {
       return;
     }
 
+    // Check if we have microphone permission
+    if (!micPermissionGranted || !streamRef.current) {
+      console.log('No microphone permission or stream');
+      setError('Microphone not ready. Please refresh the page and allow microphone access.');
+      return;
+    }
+
     console.log('Starting recording...');
     
     try {
@@ -205,28 +235,10 @@ function App() {
       // Prime TTS on first user interaction
       await primeTTSGesture();
 
-      // Clean up any existing stream first
-      if (streamRef.current) {
-        console.log('Cleaning up existing stream');
-        streamRef.current.getTracks().forEach(track => track.stop());
-        streamRef.current = null;
-      }
-
-      // Request fresh microphone access
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          sampleRate: 16000,
-          channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: true,
-        }
-      });
-
-      console.log('Microphone access granted');
-      streamRef.current = stream;
       audioChunksRef.current = [];
 
-      const mediaRecorder = new MediaRecorder(stream, {
+      // Use the existing stream to create a MediaRecorder
+      const mediaRecorder = new MediaRecorder(streamRef.current, {
         mimeType: 'audio/webm;codecs=opus'
       });
 
@@ -239,15 +251,6 @@ function App() {
       mediaRecorder.onstop = async () => {
         console.log('MediaRecorder stopped, processing audio...');
         
-        // Immediately stop all stream tracks
-        if (streamRef.current) {
-          streamRef.current.getTracks().forEach(track => {
-            track.stop();
-            console.log('Track stopped:', track.kind, track.readyState);
-          });
-          streamRef.current = null;
-        }
-
         // Process the audio if we have data
         if (audioChunksRef.current.length > 0) {
           const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
@@ -261,11 +264,11 @@ function App() {
       console.log('Recording started');
       
     } catch (err) {
-      setError('Error accessing microphone: ' + err.message);
+      setError('Error starting recording: ' + err.message);
       setIsRecording(false);
       console.error('Recording error:', err);
     }
-  }, [isRecording, isProcessing]);
+  }, [isRecording, isProcessing, micPermissionGranted]);
 
   const stopRecording = useCallback((e) => {
     // Prevent default behavior and stop event propagation
@@ -283,19 +286,10 @@ function App() {
     
     setIsRecording(false);
     
-    // Stop the media recorder if it's recording
+    // Stop the media recorder if it's recording (but keep the stream alive)
     if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
       console.log('Stopping MediaRecorder');
       mediaRecorderRef.current.stop();
-    }
-    
-    // Immediately stop all microphone tracks
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => {
-        track.stop();
-        console.log('Microphone track stopped:', track.kind, track.readyState);
-      });
-      streamRef.current = null;
     }
   }, [isRecording]);
 
@@ -364,16 +358,27 @@ function App() {
 
       setMessages(prev => [...prev, assistantMessage]);
 
-      // Auto-speak the main content (reply + question) with better mobile support
-      const toSpeak = [data.reply_es, data.question_es].filter(Boolean).join(' ');
-      if (toSpeak) {
-        // Add a small delay to ensure the UI updates first, then speak
+      // Auto-speak ALL parts of the AI response (ack, correction, reply, question)
+      const allParts = [
+        data.ack_es,
+        data.correction_es,
+        data.reply_es,
+        data.question_es
+      ].filter(Boolean);
+      
+      if (allParts.length > 0) {
+        // Add a small delay to ensure the UI updates first, then speak each part
         setTimeout(async () => {
           try {
-            if (useServerTTS) {
-              await speakServerTTS(toSpeak, API_BASE);
-            } else {
-              await speakBrowserSpanish(toSpeak);
+            for (const part of allParts) {
+              console.log('Speaking part:', part.substring(0, 50) + '...');
+              if (useServerTTS) {
+                await speakServerTTS(part, API_BASE);
+              } else {
+                await speakBrowserSpanish(part);
+              }
+              // Small pause between parts
+              await new Promise(resolve => setTimeout(resolve, 500));
             }
           } catch (e) {
             console.log('Auto-TTS failed:', e);
