@@ -2,25 +2,12 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Basic mobile optimizations without blocking text selection */
+/* Basic mobile optimizations */
 html, body {
   -webkit-tap-highlight-color: transparent;
 }
 
-/* Only prevent selection on buttons */
-button {
-  -webkit-user-select: none !important;
-  user-select: none !important;
-  -webkit-touch-callout: none;
-}
-
-/* Explicitly allow text selection everywhere else */
-* {
-  -webkit-user-select: text;
-  user-select: text;
-}
-
-/* Override for the microphone button specifically */
+/* Only the microphone button should be non-selectable */
 .mic-button {
   -webkit-user-select: none !important;
   user-select: none !important;

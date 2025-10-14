@@ -72,10 +72,34 @@ function MessageBubble({ text, isUser, label, onSpeak }) {
   if (!text) return null;
   
   return (
-    <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} mb-3 px-2`}>
-      <div className={`max-w-[80%] ${isUser ? 'ml-8' : 'mr-8'}`}>
+    <div 
+      className={`flex ${isUser ? 'justify-end' : 'justify-start'} mb-3 px-2`}
+      style={{ 
+        userSelect: 'text', 
+        WebkitUserSelect: 'text',
+        MozUserSelect: 'text',
+        msUserSelect: 'text'
+      }}
+    >
+      <div 
+        className={`max-w-[80%] ${isUser ? 'ml-8' : 'mr-8'}`}
+        style={{ 
+          userSelect: 'text', 
+          WebkitUserSelect: 'text',
+          MozUserSelect: 'text',
+          msUserSelect: 'text'
+        }}
+      >
         {label && !isUser && (
-          <div className="text-xs text-gray-500 mb-1 font-medium uppercase tracking-wide px-2">
+          <div 
+            className="text-xs text-gray-500 mb-1 font-medium uppercase tracking-wide px-2"
+            style={{ 
+              userSelect: 'text', 
+              WebkitUserSelect: 'text',
+              MozUserSelect: 'text',
+              msUserSelect: 'text'
+            }}
+          >
             {label}
           </div>
         )}
@@ -96,8 +120,22 @@ function MessageBubble({ text, isUser, label, onSpeak }) {
             }
           }}
           title="Double-click to speak aloud (if no text selected)"
+          style={{ 
+            userSelect: 'text', 
+            WebkitUserSelect: 'text',
+            MozUserSelect: 'text',
+            msUserSelect: 'text'
+          }}
         >
-          <div className="whitespace-pre-wrap leading-relaxed text-sm md:text-base">
+          <div 
+            className="whitespace-pre-wrap leading-relaxed text-sm md:text-base"
+            style={{ 
+              userSelect: 'text', 
+              WebkitUserSelect: 'text',
+              MozUserSelect: 'text',
+              msUserSelect: 'text'
+            }}
+          >
             {text}
           </div>
         </div>
@@ -484,7 +522,17 @@ function App() {
       <header className="bg-white shadow-sm border-b px-4 py-3 shrink-0">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-xl font-semibold text-gray-800">🇲🇽 Práctica de Español</h1>
+            <h1 
+              className="text-xl font-semibold text-gray-800"
+              style={{ 
+                userSelect: 'text', 
+                WebkitUserSelect: 'text',
+                MozUserSelect: 'text',
+                msUserSelect: 'text'
+              }}
+            >
+              🇲🇽 Práctica de Español
+            </h1>
           </div>
           <div className="flex items-center gap-4">
             {showInstallPrompt && (
@@ -627,7 +675,15 @@ function App() {
             {isProcessing ? '⌛' : isRecording ? '⏹️' : '🎙️'}
           </button>
           
-          <p className="mt-2 text-sm text-gray-600">
+          <p 
+            className="mt-2 text-sm text-gray-600"
+            style={{ 
+              userSelect: 'text', 
+              WebkitUserSelect: 'text',
+              MozUserSelect: 'text',
+              msUserSelect: 'text'
+            }}
+          >
             {isProcessing 
               ? 'Processing...' 
               : isRecording 
@@ -635,6 +691,22 @@ function App() {
                 : 'Hold to speak in Spanish'
             }
           </p>
+          
+          {/* Test text for selection - remove this later */}
+          <div 
+            style={{ 
+              userSelect: 'text', 
+              WebkitUserSelect: 'text',
+              MozUserSelect: 'text',
+              msUserSelect: 'text',
+              margin: '10px 0',
+              padding: '10px',
+              background: '#f0f0f0',
+              border: '1px solid #ccc'
+            }}
+          >
+            TEST: Try selecting this text. If you can select this, the CSS is working.
+          </div>
         </div>
       </div>
     </div>
