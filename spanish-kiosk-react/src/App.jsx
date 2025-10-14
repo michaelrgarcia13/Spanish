@@ -473,9 +473,9 @@ function App() {
   }, []);
 
   return (
-    <div className="fixed inset-0 bg-gray-50 flex flex-col overflow-hidden">
-      {/* Header */}
-      <header className="bg-white shadow-sm border-b px-4 py-3 flex-shrink-0">
+    <div className="h-screen w-screen bg-gray-50 flex flex-col overflow-hidden">
+      {/* Header - Fixed Height */}
+      <header className="bg-white shadow-sm border-b px-4 py-3 shrink-0">
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-xl font-semibold text-gray-800">🇲🇽 Práctica de Español</h1>
@@ -517,71 +517,73 @@ function App() {
         </div>
       </header>
 
-      {/* Chat Messages Container - Scrollable */}
-      <div className="flex-1 overflow-y-auto px-4 py-4 bg-gradient-to-b from-white to-gray-50">
-        <div className="max-w-4xl mx-auto">
-          {messages.map((message, index) => {
-            if (message.role === 'user') {
-              return (
-                <MessageBubble 
-                  key={`user-${index}`} 
-                  text={message.text} 
-                  isUser={true}
-                  onSpeak={speak} 
-                />
-              );
-            }
+      {/* Chat Messages Container - Scrollable, Takes Remaining Space */}
+      <div className="flex-1 min-h-0 overflow-y-auto px-4 py-4 bg-gradient-to-b from-white to-gray-50">
+        <div className="max-w-4xl mx-auto h-full">
+          <div className="space-y-2">
+            {messages.map((message, index) => {
+              if (message.role === 'user') {
+                return (
+                  <MessageBubble 
+                    key={`user-${index}`} 
+                    text={message.text} 
+                    isUser={true}
+                    onSpeak={speak} 
+                  />
+                );
+              }
 
-            return (
-              <div key={`assistant-${index}`}>
-                {message.ack_es && (
-                  <MessageBubble 
-                    text={message.ack_es} 
-                    isUser={false}
-                    onSpeak={speak} 
-                  />
-                )}
-                {message.correction_es && (
-                  <MessageBubble 
-                    text={message.correction_es} 
-                    isUser={false}
-                    label="Corrección"
-                    onSpeak={speak} 
-                  />
-                )}
-                {message.reply_es && (
-                  <MessageBubble 
-                    text={message.reply_es} 
-                    isUser={false}
-                    onSpeak={speak} 
-                  />
-                )}
-                {message.question_es && (
-                  <MessageBubble 
-                    text={message.question_es} 
-                    isUser={false}
-                    onSpeak={speak} 
-                  />
-                )}
-                {showEnglish && message.translation_en && (
-                  <MessageBubble 
-                    text={message.translation_en} 
-                    isUser={false}
-                    label="English"
-                    onSpeak={async (text) => await speakServerTTS(text, API_BASE)} 
-                  />
-                )}
-              </div>
-            );
-          })}
+              return (
+                <div key={`assistant-${index}`} className="space-y-2">
+                  {message.ack_es && (
+                    <MessageBubble 
+                      text={message.ack_es} 
+                      isUser={false}
+                      onSpeak={speak} 
+                    />
+                  )}
+                  {message.correction_es && (
+                    <MessageBubble 
+                      text={message.correction_es} 
+                      isUser={false}
+                      label="Corrección"
+                      onSpeak={speak} 
+                    />
+                  )}
+                  {message.reply_es && (
+                    <MessageBubble 
+                      text={message.reply_es} 
+                      isUser={false}
+                      onSpeak={speak} 
+                    />
+                  )}
+                  {message.question_es && (
+                    <MessageBubble 
+                      text={message.question_es} 
+                      isUser={false}
+                      onSpeak={speak} 
+                    />
+                  )}
+                  {showEnglish && message.translation_en && (
+                    <MessageBubble 
+                      text={message.translation_en} 
+                      isUser={false}
+                      label="English"
+                      onSpeak={async (text) => await speakServerTTS(text, API_BASE)} 
+                    />
+                  )}
+                </div>
+              );
+            })}
+          </div>
           {/* Invisible element to scroll to */}
-          <div ref={messagesEndRef} />
+          <div ref={messagesEndRef} className="h-4" />
         </div>
       </div>
 
-      {/* Current Status/Error Bar */}
+      {/* Status/Error Bar - Fixed Height (when visible) */}
       {(transcript || error) && (
-        <div className="bg-white border-t px-4 py-2 flex-shrink-0">
+        <div className="bg-white border-t px-4 py-2 shrink-0">
           {transcript && (
             <div className="max-w-4xl mx-auto">
               <p className="text-sm text-gray-600">You said: <span className="text-gray-800 font-medium">{transcript}</span></p>
@@ -595,8 +597,8 @@ function App() {
         </div>
       )}
 
-      {/* Bottom Microphone Button */}
-      <div className="bg-white border-t px-4 py-4 flex-shrink-0">
+      {/* Bottom Microphone Button - Fixed Height */}
+      <div className="bg-white border-t px-4 py-6 shrink-0">
         <div className="max-w-4xl mx-auto text-center">
           <button
             onMouseDown={(e) => startRecording(e)}
