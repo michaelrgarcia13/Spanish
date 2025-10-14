@@ -2,9 +2,10 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Basic mobile optimizations */
-html, body {
-  -webkit-tap-highlight-color: transparent;
+/* Enable text selection by default */
+* {
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 /* Only the microphone button should be non-selectable */
@@ -12,7 +13,6 @@ html, body {
   -webkit-user-select: none !important;
   user-select: none !important;
   -webkit-touch-callout: none !important;
-  touch-action: manipulation;
 }
 
 button {

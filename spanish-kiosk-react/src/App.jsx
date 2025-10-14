@@ -67,75 +67,39 @@ async function speakServerTTS(text, apiBase) {
 // Detect iOS for better defaults
 const isiOS = typeof navigator !== 'undefined' && /iP(hone|ad|od)/.test(navigator.userAgent);
 
-// UI Components
+// UI Components  
 function MessageBubble({ text, isUser, label, onSpeak }) {
-  if (!text) return null;
+  console.log('MessageBubble rendering:', { text, isUser, label });
+  
+  if (!text) {
+    console.log('MessageBubble: No text provided, returning null');
+    return null;
+  }
   
   return (
-    <div 
-      className={`flex ${isUser ? 'justify-end' : 'justify-start'} mb-3 px-2`}
-      style={{ 
-        userSelect: 'text', 
-        WebkitUserSelect: 'text',
-        MozUserSelect: 'text',
-        msUserSelect: 'text'
-      }}
-    >
-      <div 
-        className={`max-w-[80%] ${isUser ? 'ml-8' : 'mr-8'}`}
-        style={{ 
-          userSelect: 'text', 
-          WebkitUserSelect: 'text',
-          MozUserSelect: 'text',
-          msUserSelect: 'text'
-        }}
-      >
+    <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} mb-3 px-2`}>
+      <div className={`max-w-[80%] ${isUser ? 'ml-8' : 'mr-8'}`}>
         {label && !isUser && (
-          <div 
-            className="text-xs text-gray-500 mb-1 font-medium uppercase tracking-wide px-2"
-            style={{ 
-              userSelect: 'text', 
-              WebkitUserSelect: 'text',
-              MozUserSelect: 'text',
-              msUserSelect: 'text'
-            }}
-          >
+          <div className="text-xs text-gray-500 mb-1 font-medium uppercase tracking-wide px-2">
             {label}
           </div>
         )}
         <div
           className={`
-            px-4 py-3 shadow-md transition-all duration-200
+            px-4 py-3 shadow-md transition-shadow duration-200
             ${isUser 
               ? 'bg-blue-500 text-white rounded-2xl rounded-br-md' 
               : 'bg-gray-200 text-gray-800 rounded-2xl rounded-bl-md'
             }
-            hover:shadow-lg
+            hover:shadow-lg cursor-pointer
           `}
-          onDoubleClick={(e) => {
-            // Only trigger speak if no text is selected
-            const selection = window.getSelection();
-            if (!selection || selection.toString().length === 0) {
-              onSpeak(text);
-            }
+          onClick={() => {
+            console.log('MessageBubble clicked, speaking:', text);
+            onSpeak(text);
           }}
-          title="Double-click to speak aloud (if no text selected)"
-          style={{ 
-            userSelect: 'text', 
-            WebkitUserSelect: 'text',
-            MozUserSelect: 'text',
-            msUserSelect: 'text'
-          }}
+          title="Click to speak aloud"
         >
-          <div 
-            className="whitespace-pre-wrap leading-relaxed text-sm md:text-base"
-            style={{ 
-              userSelect: 'text', 
-              WebkitUserSelect: 'text',
-              MozUserSelect: 'text',
-              msUserSelect: 'text'
-            }}
-          >
+          <div className="whitespace-pre-wrap leading-relaxed text-sm md:text-base select-text">
             {text}
           </div>
         </div>
@@ -574,8 +538,23 @@ function App() {
       {/* Chat Messages Container - Scrollable, Takes Remaining Space */}
       <div className="flex-1 min-h-0 overflow-y-auto px-4 py-4 bg-gradient-to-b from-white to-gray-50">
         <div className="max-w-4xl mx-auto h-full">
+          
+          {/* Debug Info */}
+          <div className="mb-4 p-2 bg-yellow-100 border border-yellow-300 rounded text-sm">
+            <div>Messages count: {messages.length}</div>
+            <div>Messages: {JSON.stringify(messages, null, 2)}</div>
+          </div>
+          
+          {/* Test Message - Always Visible */}
+          <div className="mb-4 p-4 bg-green-100 border border-green-300 rounded">
+            <div className="text-lg font-bold select-text">TEST MESSAGE - Can you select this text?</div>
+            <div className="mt-2 select-text">This is a test message that should always be visible and selectable. If you can see this but not message bubbles, there's an issue with the MessageBubble component.</div>
+          </div>
+          
           <div className="space-y-2">
             {messages.map((message, index) => {
+              console.log('Rendering message:', index, message);
+              
               if (message.role === 'user') {
                 return (
                   <MessageBubble 
@@ -691,22 +670,6 @@ function App() {
                 : 'Hold to speak in Spanish'
             }
           </p>
-          
-          {/* Test text for selection - remove this later */}
-          <div 
-            style={{ 
-              userSelect: 'text', 
-              WebkitUserSelect: 'text',
-              MozUserSelect: 'text',
-              msUserSelect: 'text',
-              margin: '10px 0',
-              padding: '10px',
-              background: '#f0f0f0',
-              border: '1px solid #ccc'
-            }}
-          >
-            TEST: Try selecting this text. If you can select this, the CSS is working.
-          </div>
         </div>
       </div>
     </div>
