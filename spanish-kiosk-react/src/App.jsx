@@ -81,20 +81,22 @@ function MessageBubble({ text, isUser, label, onSpeak }) {
         )}
         <div
           className={`
-            px-4 py-3 shadow-md cursor-text transition-all duration-200 
+            px-4 py-3 shadow-md transition-all duration-200 message-content
             ${isUser 
               ? 'bg-blue-500 text-white rounded-2xl rounded-br-md' 
               : 'bg-gray-200 text-gray-800 rounded-2xl rounded-bl-md'
             }
-            hover:shadow-lg active:scale-[0.98] select-text
+            hover:shadow-lg
           `}
-          onDoubleClick={() => onSpeak(text)}
-          role="button"
-          tabIndex={0}
-          onKeyDown={(e) => e.key === "Enter" && onSpeak(text)}
+          onDoubleClick={(e) => {
+            e.preventDefault();
+            onSpeak(text);
+          }}
           title="Double-click to speak aloud"
         >
-          <div className="whitespace-pre-wrap leading-relaxed text-sm md:text-base select-text">{text}</div>
+          <div className="whitespace-pre-wrap leading-relaxed text-sm md:text-base message-content">
+            {text}
+          </div>
         </div>
       </div>
     </div>
