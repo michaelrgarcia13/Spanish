@@ -68,30 +68,35 @@ async function speakServerTTS(text, apiBase) {
 const isiOS = typeof navigator !== 'undefined' && /iP(hone|ad|od)/.test(navigator.userAgent);
 
 // UI Components
-function Section({ label, text, onSpeak, isUser = false }) {
+function MessageBubble({ text, isUser, label, onSpeak }) {
   if (!text) return null;
   
-  const baseClasses = "max-w-[85%] rounded-2xl px-4 py-3 leading-relaxed shadow-lg select-none cursor-pointer transition-all duration-200 hover:shadow-xl";
-  const userClasses = "self-end bg-blue-500 text-white hover:bg-blue-600";
-  const assistantClasses = "self-start bg-gray-100 text-gray-800 hover:bg-gray-200";
-  
   return (
-    <div
-      className={`${baseClasses} ${isUser ? userClasses : assistantClasses}`}
-      onClick={() => onSpeak(text)}
-      role="button"
-      tabIndex={0}
-      onKeyDown={(e) => e.key === "Enter" && onSpeak(text)}
-    >
-      {label && !isUser ? <div className="text-xs text-gray-500 mb-1 font-medium uppercase tracking-wide">{label}</div> : null}
-      <div className="whitespace-pre-wrap">{text}</div>
+    <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} mb-3 px-2`}>
+      <div className={`max-w-[80%] ${isUser ? 'ml-8' : 'mr-8'}`}>
+        {label && !isUser && (
+          <div className="text-xs text-gray-500 mb-1 font-medium uppercase tracking-wide px-2">
+            {label}
+          </div>
+        )}
+        <div
+          className={`
+            px-4 py-3 shadow-md cursor-pointer transition-all duration-200 
+            ${isUser 
+              ? 'bg-blue-500 text-white rounded-2xl rounded-br-md' 
+              : 'bg-gray-200 text-gray-800 rounded-2xl rounded-bl-md'
+            }
+            hover:shadow-lg active:scale-[0.98]
+          `}
+          onClick={() => onSpeak(text)}
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => e.key === "Enter" && onSpeak(text)}
+        >
+          <div className="whitespace-pre-wrap leading-relaxed text-sm md:text-base">{text}</div>
+        </div>
+      </div>
     </div>
-  );
-}
-
-function UserBubble({ text, onSpeak }) {
-  return (
-    <Section text={text} onSpeak={onSpeak} isUser={true} />
   );
 }
 
@@ -153,6 +158,19 @@ function App() {
     };
   }, []);
 
+  // Cleanup microphone on unmount
+  useEffect(() => {
+    return () => {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop());
+        streamRef.current = null;
+      }
+      if (mediaRecorderRef.current) {
+        mediaRecorderRef.current = null;
+      }
+    };
+  }, []);
+
   const handleInstallClick = () => {
     if (deferredPrompt) {
       deferredPrompt.prompt();
@@ -166,13 +184,35 @@ function App() {
     }
   };
 
-  const startRecording = useCallback(async () => {
+  const startRecording = useCallback(async (e) => {
+    // Prevent default behavior and stop event propagation
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+
+    // Prevent starting if already recording or processing
+    if (isRecording || isProcessing) {
+      console.log('Already recording or processing, ignoring start request');
+      return;
+    }
+
+    console.log('Starting recording...');
+    
     try {
       setError('');
       
       // Prime TTS on first user interaction
       await primeTTSGesture();
 
+      // Clean up any existing stream first
+      if (streamRef.current) {
+        console.log('Cleaning up existing stream');
+        streamRef.current.getTracks().forEach(track => track.stop());
+        streamRef.current = null;
+      }
+
+      // Request fresh microphone access
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           sampleRate: 16000,
@@ -182,6 +222,7 @@ function App() {
         }
       });
 
+      console.log('Microphone access granted');
       streamRef.current = stream;
       audioChunksRef.current = [];
 
@@ -196,31 +237,67 @@ function App() {
       };
 
       mediaRecorder.onstop = async () => {
-        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
-        await processAudio(audioBlob);
+        console.log('MediaRecorder stopped, processing audio...');
         
-        // Clean up stream
+        // Immediately stop all stream tracks
         if (streamRef.current) {
-          streamRef.current.getTracks().forEach(track => track.stop());
+          streamRef.current.getTracks().forEach(track => {
+            track.stop();
+            console.log('Track stopped:', track.kind, track.readyState);
+          });
           streamRef.current = null;
+        }
+
+        // Process the audio if we have data
+        if (audioChunksRef.current.length > 0) {
+          const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+          await processAudio(audioBlob);
         }
       };
 
       mediaRecorderRef.current = mediaRecorder;
       mediaRecorder.start();
       setIsRecording(true);
+      console.log('Recording started');
+      
     } catch (err) {
       setError('Error accessing microphone: ' + err.message);
+      setIsRecording(false);
       console.error('Recording error:', err);
     }
-  }, []);
+  }, [isRecording, isProcessing]);
 
-  const stopRecording = useCallback(() => {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
-      mediaRecorderRef.current.stop();
-      setIsRecording(false);
+  const stopRecording = useCallback((e) => {
+    // Prevent default behavior and stop event propagation
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
     }
-  }, []);
+
+    console.log('Stopping recording...');
+    
+    if (!isRecording) {
+      console.log('Not recording, ignoring stop request');
+      return;
+    }
+    
+    setIsRecording(false);
+    
+    // Stop the media recorder if it's recording
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+      console.log('Stopping MediaRecorder');
+      mediaRecorderRef.current.stop();
+    }
+    
+    // Immediately stop all microphone tracks
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => {
+        track.stop();
+        console.log('Microphone track stopped:', track.kind, track.readyState);
+      });
+      streamRef.current = null;
+    }
+  }, [isRecording]);
 
   const processAudio = useCallback(async (audioBlob) => {
     setIsProcessing(true);
@@ -338,7 +415,7 @@ function App() {
   }, []);
 
   return (
-    <div className="h-screen bg-gray-50 flex flex-col">
+    <div className="fixed inset-0 bg-gray-50 flex flex-col overflow-hidden">
       {/* Header */}
       <header className="bg-white shadow-sm border-b px-4 py-3 flex-shrink-0">
         <div className="flex items-center justify-between">
@@ -383,39 +460,64 @@ function App() {
       </header>
 
       {/* Chat Messages Container - Scrollable */}
-      <div className="flex-1 overflow-y-auto px-4 py-4">
+      <div className="flex-1 overflow-y-auto px-4 py-4 bg-gradient-to-b from-white to-gray-50">
         <div className="max-w-4xl mx-auto">
-          <div className="flex flex-col gap-3">
-            {messages.map((message, index) => {
-              if (message.role === 'user') {
-                return <UserBubble key={index} text={message.text} onSpeak={speak} />;
-              }
-
+          {messages.map((message, index) => {
+            if (message.role === 'user') {
               return (
-                <div key={index} className="flex flex-col gap-2">
-                  <Section text={message.ack_es} onSpeak={speak} />
-                  {message.correction_es && (
-                    <Section 
-                      label="Corrección" 
-                      text={message.correction_es} 
-                      onSpeak={speak} 
-                    />
-                  )}
-                  <Section text={message.reply_es} onSpeak={speak} />
-                  <Section text={message.question_es} onSpeak={speak} />
-                  {showEnglish && message.translation_en && (
-                    <Section 
-                      label="English" 
-                      text={message.translation_en} 
-                      onSpeak={async (text) => await speakServerTTS(text, API_BASE)} 
-                    />
-                  )}
-                </div>
+                <MessageBubble 
+                  key={`user-${index}`} 
+                  text={message.text} 
+                  isUser={true}
+                  onSpeak={speak} 
+                />
               );
-            })}
-            {/* Invisible element to scroll to */}
-            <div ref={messagesEndRef} />
-          </div>
+            }
+
+            return (
+              <div key={`assistant-${index}`}>
+                {message.ack_es && (
+                  <MessageBubble 
+                    text={message.ack_es} 
+                    isUser={false}
+                    onSpeak={speak} 
+                  />
+                )}
+                {message.correction_es && (
+                  <MessageBubble 
+                    text={message.correction_es} 
+                    isUser={false}
+                    label="Corrección"
+                    onSpeak={speak} 
+                  />
+                )}
+                {message.reply_es && (
+                  <MessageBubble 
+                    text={message.reply_es} 
+                    isUser={false}
+                    onSpeak={speak} 
+                  />
+                )}
+                {message.question_es && (
+                  <MessageBubble 
+                    text={message.question_es} 
+                    isUser={false}
+                    onSpeak={speak} 
+                  />
+                )}
+                {showEnglish && message.translation_en && (
+                  <MessageBubble 
+                    text={message.translation_en} 
+                    isUser={false}
+                    label="English"
+                    onSpeak={async (text) => await speakServerTTS(text, API_BASE)} 
+                  />
+                )}
+              </div>
+            );
+          })}
+          {/* Invisible element to scroll to */}
+          <div ref={messagesEndRef} />
         </div>
       </div>
 
@@ -436,28 +538,31 @@ function App() {
       )}
 
       {/* Bottom Microphone Button */}
-      <div className="bg-white border-t px-4 py-6 flex-shrink-0">
+      <div className="bg-white border-t px-4 py-4 flex-shrink-0">
         <div className="max-w-4xl mx-auto text-center">
           <button
-            onMouseDown={startRecording}
-            onMouseUp={stopRecording}
-            onTouchStart={startRecording}
-            onTouchEnd={stopRecording}
+            onMouseDown={(e) => startRecording(e)}
+            onMouseUp={(e) => stopRecording(e)}
+            onMouseLeave={(e) => isRecording && stopRecording(e)}
+            onTouchStart={(e) => startRecording(e)}
+            onTouchEnd={(e) => stopRecording(e)}
+            onTouchCancel={(e) => isRecording && stopRecording(e)}
             disabled={isProcessing}
             className={`
-              w-24 h-24 rounded-full text-6xl transition-all duration-200 transform shadow-xl
+              w-40 h-16 rounded-full text-4xl transition-all duration-200 transform shadow-xl
               ${isRecording 
-                ? 'bg-red-500 scale-110 animate-pulse shadow-red-500/50' 
+                ? 'bg-red-500 scale-105 animate-pulse shadow-red-500/50' 
                 : 'bg-blue-500 hover:bg-blue-600 hover:scale-105 shadow-blue-500/30'
               }
               ${isProcessing ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}
-              active:scale-95 text-white
+              active:scale-95 text-white font-medium touch-none select-none
             `}
+            style={{ WebkitTouchCallout: 'none', WebkitUserSelect: 'none' }}
           >
             {isProcessing ? '⌛' : isRecording ? '⏹️' : '🎙️'}
           </button>
           
-          <p className="mt-3 text-sm text-gray-600">
+          <p className="mt-2 text-sm text-gray-600">
             {isProcessing 
               ? 'Processing...' 
               : isRecording 
