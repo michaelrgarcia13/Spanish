@@ -69,34 +69,23 @@ const isiOS = typeof navigator !== 'undefined' && /iP(hone|ad|od)/.test(navigato
 
 // UI Components  
 function MessageBubble({ text, isUser, label, onSpeak }) {
-  console.log('MessageBubble rendering:', { text, isUser, label });
-  
-  if (!text) {
-    console.log('MessageBubble: No text provided, returning null');
-    return null;
-  }
+  if (!text) return null;
   
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} mb-3 px-2`}>
       <div className={`max-w-[80%] ${isUser ? 'ml-8' : 'mr-8'}`}>
         {label && !isUser && (
-          <div className="text-xs text-gray-500 mb-1 font-medium uppercase tracking-wide px-2">
+          <div className="text-xs text-gray-500 mb-1 font-medium uppercase tracking-wide px-2 select-text">
             {label}
           </div>
         )}
         <div
-          className={`
-            px-4 py-3 shadow-md transition-shadow duration-200
-            ${isUser 
-              ? 'bg-blue-500 text-white rounded-2xl rounded-br-md' 
-              : 'bg-gray-200 text-gray-800 rounded-2xl rounded-bl-md'
-            }
-            hover:shadow-lg cursor-pointer
-          `}
-          onClick={() => {
-            console.log('MessageBubble clicked, speaking:', text);
-            onSpeak(text);
-          }}
+          className={`px-4 py-3 shadow-lg transition-all duration-200 cursor-pointer select-text ${
+            isUser 
+              ? 'bg-blue-500 text-white rounded-2xl rounded-br-md hover:bg-blue-600' 
+              : 'bg-gray-200 text-gray-800 rounded-2xl rounded-bl-md hover:bg-gray-300'
+          } hover:shadow-xl`}
+          onClick={() => onSpeak(text)}
           title="Click to speak aloud"
         >
           <div className="whitespace-pre-wrap leading-relaxed text-sm md:text-base select-text">
@@ -539,21 +528,10 @@ function App() {
       <div className="flex-1 min-h-0 overflow-y-auto px-4 py-4 bg-gradient-to-b from-white to-gray-50">
         <div className="max-w-4xl mx-auto h-full">
           
-          {/* Debug Info */}
-          <div className="mb-4 p-2 bg-yellow-100 border border-yellow-300 rounded text-sm">
-            <div>Messages count: {messages.length}</div>
-            <div>Messages: {JSON.stringify(messages, null, 2)}</div>
-          </div>
-          
-          {/* Test Message - Always Visible */}
-          <div className="mb-4 p-4 bg-green-100 border border-green-300 rounded">
-            <div className="text-lg font-bold select-text">TEST MESSAGE - Can you select this text?</div>
-            <div className="mt-2 select-text">This is a test message that should always be visible and selectable. If you can see this but not message bubbles, there's an issue with the MessageBubble component.</div>
-          </div>
+
           
           <div className="space-y-2">
             {messages.map((message, index) => {
-              console.log('Rendering message:', index, message);
               
               if (message.role === 'user') {
                 return (
