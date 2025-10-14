@@ -121,6 +121,7 @@ function App() {
   const [showInstallPrompt, setShowInstallPrompt] = useState(false);
   const [deferredPrompt, setDeferredPrompt] = useState(null);
   const [micPermissionGranted, setMicPermissionGranted] = useState(false);
+  const [permissionRequested, setPermissionRequested] = useState(false);
 
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
@@ -159,28 +160,33 @@ function App() {
     };
   }, []);
 
-  // Request microphone permission on mount
+  // Check and store microphone permission status
   useEffect(() => {
-    const requestMicPermission = async () => {
+    const checkPermission = async () => {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          audio: {
-            sampleRate: 16000,
-            channelCount: 1,
-            echoCancellation: true,
-            noiseSuppression: true,
+        // Check if permission was already granted before
+        const storedPermission = localStorage.getItem('micPermissionGranted');
+        if (storedPermission === 'true') {
+          setMicPermissionGranted(true);
+          console.log('Microphone permission already granted (from storage)');
+          return;
+        }
+
+        // Try to check current permission status
+        if (navigator.permissions) {
+          const permissionStatus = await navigator.permissions.query({ name: 'microphone' });
+          if (permissionStatus.state === 'granted') {
+            setMicPermissionGranted(true);
+            localStorage.setItem('micPermissionGranted', 'true');
+            console.log('Microphone permission already granted (from browser)');
           }
-        });
-        streamRef.current = stream;
-        setMicPermissionGranted(true);
-        console.log('Microphone permission granted and stream ready');
+        }
       } catch (err) {
-        console.error('Microphone permission denied:', err);
-        setError('Microphone permission denied. Please enable it in your browser settings.');
+        console.log('Could not check microphone permission status:', err);
       }
     };
 
-    requestMicPermission();
+    checkPermission();
 
     // Cleanup on unmount
     return () => {
@@ -207,6 +213,37 @@ function App() {
     }
   };
 
+  const requestMicPermissionOnce = useCallback(async () => {
+    if (permissionRequested) return;
+    
+    try {
+      setPermissionRequested(true);
+      console.log('Requesting microphone permission...');
+      
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          sampleRate: 16000,
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: true,
+        }
+      });
+      
+      // Stop the test stream immediately
+      stream.getTracks().forEach(track => track.stop());
+      
+      // Store permission in localStorage
+      localStorage.setItem('micPermissionGranted', 'true');
+      setMicPermissionGranted(true);
+      console.log('Microphone permission granted and stored');
+      
+    } catch (err) {
+      console.error('Microphone permission denied:', err);
+      setError('Microphone permission denied. Please enable it in your browser settings.');
+      setPermissionRequested(false);
+    }
+  }, [permissionRequested]);
+
   const startRecording = useCallback(async (e) => {
     // Prevent default behavior and stop event propagation
     if (e) {
@@ -220,11 +257,11 @@ function App() {
       return;
     }
 
-    // Check if we have microphone permission
-    if (!micPermissionGranted || !streamRef.current) {
-      console.log('No microphone permission or stream');
-      setError('Microphone not ready. Please refresh the page and allow microphone access.');
-      return;
+    // Request permission if not granted yet
+    if (!micPermissionGranted) {
+      console.log('Requesting microphone permission first...');
+      await requestMicPermissionOnce();
+      if (!micPermissionGranted) return; // Permission was denied
     }
 
     console.log('Starting recording...');
@@ -235,10 +272,20 @@ function App() {
       // Prime TTS on first user interaction
       await primeTTSGesture();
 
+      // Request a fresh stream for this recording session
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          sampleRate: 16000,
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: true,
+        }
+      });
+
+      streamRef.current = stream;
       audioChunksRef.current = [];
 
-      // Use the existing stream to create a MediaRecorder
-      const mediaRecorder = new MediaRecorder(streamRef.current, {
+      const mediaRecorder = new MediaRecorder(stream, {
         mimeType: 'audio/webm;codecs=opus'
       });
 
@@ -250,6 +297,12 @@ function App() {
 
       mediaRecorder.onstop = async () => {
         console.log('MediaRecorder stopped, processing audio...');
+        
+        // Clean up the stream
+        if (streamRef.current) {
+          streamRef.current.getTracks().forEach(track => track.stop());
+          streamRef.current = null;
+        }
         
         // Process the audio if we have data
         if (audioChunksRef.current.length > 0) {
@@ -268,7 +321,7 @@ function App() {
       setIsRecording(false);
       console.error('Recording error:', err);
     }
-  }, [isRecording, isProcessing, micPermissionGranted]);
+  }, [isRecording, isProcessing, micPermissionGranted, requestMicPermissionOnce]);
 
   const stopRecording = useCallback((e) => {
     // Prevent default behavior and stop event propagation
@@ -286,7 +339,7 @@ function App() {
     
     setIsRecording(false);
     
-    // Stop the media recorder if it's recording (but keep the stream alive)
+    // Stop the media recorder if it's recording
     if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
       console.log('Stopping MediaRecorder');
       mediaRecorderRef.current.stop();
