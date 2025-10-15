@@ -1,5 +1,5 @@
 // Service Worker for Spanish Tutor PWA
-const CACHE_NAME = 'spanish-tutor-v1.0.0';
+const CACHE_NAME = 'spanish-tutor-v1.0.1'; // Increment version to force cache refresh
 const STATIC_ASSETS = [
   '/',
   '/index.html',
@@ -7,6 +7,9 @@ const STATIC_ASSETS = [
   '/icon-192.png',
   '/icon-512.png'
 ];
+
+// Detect development mode
+const isDevelopment = self.location.hostname === 'localhost' || self.location.hostname === '127.0.0.1';
 
 // Install event - cache essential assets
 self.addEventListener('install', event => {
@@ -61,17 +64,23 @@ self.addEventListener('fetch', event => {
   }
 
   event.respondWith(
-    caches.match(event.request)
-      .then(response => {
-        // Return cached version if available
-        if (response) {
-          console.log('[SW] Serving from cache:', event.request.url);
-          return response;
-        }
+    // In development mode, always fetch from network to avoid caching issues
+    isDevelopment ? 
+      fetch(event.request).then(response => {
+        console.log('[SW] Development mode - bypassing cache:', event.request.url);
+        return response;
+      }) :
+      caches.match(event.request)
+        .then(response => {
+          // Return cached version if available
+          if (response) {
+            console.log('[SW] Serving from cache:', event.request.url);
+            return response;
+          }
 
-        // Otherwise fetch from network
-        console.log('[SW] Fetching from network:', event.request.url);
-        return fetch(event.request)
+          // Otherwise fetch from network
+          console.log('[SW] Fetching from network:', event.request.url);
+          return fetch(event.request)
           .then(response => {
             // Don't cache non-successful responses
             if (!response || response.status !== 200 || response.type !== 'basic') {

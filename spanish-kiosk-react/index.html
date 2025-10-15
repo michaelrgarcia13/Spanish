@@ -28,11 +28,20 @@
     <title>Práctica de Español - Tutor Latinoamericano</title>
     
     <script>
-      // Backend URL for production deployment
-      window.__API_BASE__ = "https://spanish-xcs6.onrender.com";
+      // Automatically detect development vs production
+      if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+        // Development mode - use local backend
+        window.__API_BASE__ = "http://localhost:3000";
+        console.log('🔧 Development mode: Using local backend');
+      } else {
+        // Production mode - use deployed backend
+        window.__API_BASE__ = "https://spanish-xcs6.onrender.com";
+        console.log('🚀 Production mode: Using deployed backend');
+      }
       
       // Register Service Worker for PWA functionality
-      if ('serviceWorker' in navigator) {
+      // Only register in production to avoid development caching issues
+      if ('serviceWorker' in navigator && window.location.protocol === 'https:') {
         window.addEventListener('load', () => {
           navigator.serviceWorker.register('/sw.js')
             .then(registration => {
@@ -42,6 +51,8 @@
               console.log('SW registration failed: ', registrationError);
             });
         });
+      } else {
+        console.log('Service Worker disabled in development mode');
       }
     </script>
   </head>

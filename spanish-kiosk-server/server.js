@@ -41,9 +41,12 @@ app.post('/chat', async (req, res) => {
           "reply_es": "string - Main response in Spanish",
           "question_es": "string - Follow-up question",
           "needs_correction": false,
-          "translation_en": "string or null - English translation if requested"
+          "translation_en": "string or null - English translations if requested"
         }) + "\n" +
-        (translate ? "Incluye translation_en con traducción útil al inglés." : "Pon translation_en como null.")
+        (translate ? 
+          "Incluye translation_en con las traducciones estructuradas así: 'acknowledgment: [traducción del ack_es]\\nreply: [traducción del reply_es]\\nquestion: [traducción del question_es]'" + 
+          (translate ? "\\ncorrection: [traducción del correction_es si existe]" : "") :
+          "Pon translation_en como null.")
     };
 
     const allMessages = [systemPrompt, ...messages];
@@ -116,6 +119,51 @@ app.post('/stt', upload.single('audio'), async (req, res) => {
     const data = await r.json();
     res.json({ text: data.text || '' });
   } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+// ---- TRANSLATION: Translate text between languages ----
+app.post('/api/translate', async (req, res) => {
+  try {
+    const { text, from = 'es', to = 'en' } = req.body;
+    
+    if (!text) {
+      return res.status(400).json({ error: 'Text is required' });
+    }
+
+    const systemPrompt = from === 'es' && to === 'en' 
+      ? "You are a translator. Translate the given Spanish text to natural English. Only respond with the English translation, nothing else."
+      : `You are a translator. Translate the given text from ${from} to ${to}. Only respond with the translation, nothing else.`;
+
+    const r = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${OPENAI_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: OPENAI_CHAT_MODEL,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: text }
+        ],
+        max_tokens: 200,
+        temperature: 0.3
+      })
+    });
+
+    if (!r.ok) {
+      console.error('OpenAI API error for translation:', r.status, await r.text());
+      return res.status(r.status).send(await r.text());
+    }
+
+    const data = await r.json();
+    const translation = data.choices?.[0]?.message?.content?.trim() || '';
+    
+    res.json({ translation });
+  } catch (e) {
+    console.error('Translation error:', e);
     res.status(500).json({ error: String(e) });
   }
 });

@@ -68,29 +68,97 @@ async function speakServerTTS(text, apiBase) {
 const isiOS = typeof navigator !== 'undefined' && /iP(hone|ad|od)/.test(navigator.userAgent);
 
 // UI Components  
-function MessageBubble({ text, isUser, label, onSpeak }) {
+function MessageBubble({ text, isUser, label, onSpeak, messageId, translation, hasBeenClicked }) {
   if (!text) return null;
   
+  const bubbleStyle = isUser 
+    ? {
+        backgroundColor: '#3b82f6',
+        color: 'white',
+        borderRadius: '24px 24px 8px 24px',
+        marginLeft: 'auto',
+        marginRight: '8px',
+      }
+    : {
+        backgroundColor: '#f3f4f6',
+        color: '#1f2937',
+        borderRadius: '24px 24px 24px 8px',
+        marginLeft: '8px',
+        marginRight: 'auto',
+      };
+  
   return (
-    <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} mb-3 px-2`}>
-      <div className={`max-w-[80%] ${isUser ? 'ml-8' : 'mr-8'}`}>
+    <div style={{ 
+      display: 'flex', 
+      justifyContent: isUser ? 'flex-end' : 'flex-start',
+      marginBottom: '16px',
+      padding: '0 16px'
+    }}>
+      <div style={{ maxWidth: '75%' }}>
         {label && !isUser && (
-          <div className="text-xs text-gray-500 mb-1 font-medium uppercase tracking-wide px-2 select-text">
+          <div style={{
+            fontSize: '12px',
+            color: '#6b7280',
+            marginBottom: '8px',
+            fontWeight: '600',
+            textTransform: 'uppercase',
+            letterSpacing: '0.05em',
+            paddingLeft: '12px',
+            userSelect: 'text'
+          }}>
             {label}
           </div>
         )}
         <div
-          className={`px-4 py-3 shadow-lg transition-all duration-200 cursor-pointer select-text ${
-            isUser 
-              ? 'bg-blue-500 text-white rounded-2xl rounded-br-md hover:bg-blue-600' 
-              : 'bg-gray-200 text-gray-800 rounded-2xl rounded-bl-md hover:bg-gray-300'
-          } hover:shadow-xl`}
-          onClick={() => onSpeak(text)}
-          title="Click to speak aloud"
+          onClick={() => onSpeak(text, messageId)}
+          title="Click anywhere on this bubble to hear it spoken aloud and see English translation"
+          style={{
+            ...bubbleStyle,
+            padding: '16px 20px',
+            cursor: 'pointer',
+            userSelect: 'text',
+            boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)',
+            transition: 'all 0.2s ease',
+            fontWeight: '500',
+            lineHeight: '1.5'
+          }}
+          onMouseEnter={(e) => {
+            e.target.style.transform = 'scale(1.02)';
+            e.target.style.boxShadow = '0 8px 20px rgba(0, 0, 0, 0.2)';
+          }}
+          onMouseLeave={(e) => {
+            e.target.style.transform = 'scale(1)';
+            e.target.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.15)';
+          }}
         >
-          <div className="whitespace-pre-wrap leading-relaxed text-sm md:text-base select-text">
+          <div style={{ 
+            whiteSpace: 'pre-wrap',
+            userSelect: 'text',
+            fontSize: '16px'
+          }}>
             {text}
           </div>
+          {translation && hasBeenClicked && (
+            <div style={{
+              marginTop: '12px',
+              paddingTop: '10px',
+              borderTop: isUser 
+                ? '1px solid rgba(255, 255, 255, 0.3)' 
+                : '1px solid rgba(0, 0, 0, 0.1)',
+              fontSize: '14px',
+              fontStyle: 'italic',
+              opacity: isUser ? '0.9' : '0.7',
+              color: isUser ? 'rgba(255, 255, 255, 0.9)' : '#6b7280',
+              backgroundColor: isUser 
+                ? 'rgba(255, 255, 255, 0.1)' 
+                : 'rgba(0, 0, 0, 0.02)',
+              borderRadius: '6px',
+              padding: '6px 8px',
+              lineHeight: '1.4'
+            }}>
+              💬 {translation}
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -119,6 +187,8 @@ function App() {
   const [deferredPrompt, setDeferredPrompt] = useState(null);
   const [micPermissionGranted, setMicPermissionGranted] = useState(false);
   const [permissionRequested, setPermissionRequested] = useState(false);
+  const [translations, setTranslations] = useState(new Map()); // Track translations for messages
+  const [clickedBubbles, setClickedBubbles] = useState(new Set()); // Track which bubbles have been clicked
 
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
@@ -379,13 +449,13 @@ function App() {
         content: msg.text || msg.content || [msg.ack_es, msg.reply_es, msg.question_es].filter(Boolean).join(' ')
       }));
 
-      // Send to chat with translation flag
+      // Send to chat with translation flag (always request translations for pre-caching)
       const chatResponse = await fetch(`${API_BASE}/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
           messages: simpleHistory, 
-          translate: showEnglish 
+          translate: true // Always request translations for pre-caching
         }),
       });
 
@@ -406,7 +476,73 @@ function App() {
         needs_correction: !!data.needs_correction
       };
 
-      setMessages(prev => [...prev, assistantMessage]);
+      // Pre-cache translations for instant display when bubbles are clicked
+      setMessages(prev => {
+        const newMessages = [...prev, assistantMessage];
+        const assistantIndex = newMessages.length - 1;
+        const userIndex = assistantIndex - 1;
+        
+        // Pre-translate and cache user message
+        if (userIndex >= 0 && newMessages[userIndex].role === 'user') {
+          const userMessageId = `user-${userIndex}`;
+          const userText = newMessages[userIndex].text;
+          translateText(userText).then(translation => {
+            if (translation) {
+              setTranslations(prev => new Map(prev.set(userMessageId, translation)));
+            }
+          });
+        }
+        
+        // Pre-cache assistant translations if available
+        if (data.translation_en) {
+          const newTranslations = new Map();
+          // Helper function to extract text from brackets
+          const extractFromBrackets = (text) => {
+            const match = text.match(/\[(.*?)\]/);
+            return match ? match[1] : text.trim();
+          };
+          
+          if (data.ack_es && data.translation_en.includes('acknowledgment:')) {
+            const ackLine = data.translation_en.split('acknowledgment:')[1]?.split('\n')[0]?.trim();
+            if (ackLine) {
+              const ackTranslation = extractFromBrackets(ackLine);
+              newTranslations.set(`assistant-${assistantIndex}-ack`, ackTranslation);
+            }
+          }
+          if (data.correction_es && data.translation_en.includes('correction:')) {
+            const correctionLine = data.translation_en.split('correction:')[1]?.split('\n')[0]?.trim();
+            if (correctionLine) {
+              const correctionTranslation = extractFromBrackets(correctionLine);
+              newTranslations.set(`assistant-${assistantIndex}-correction`, correctionTranslation);
+            }
+          }
+          if (data.reply_es && data.translation_en.includes('reply:')) {
+            const replyLine = data.translation_en.split('reply:')[1]?.split('\n')[0]?.trim();
+            if (replyLine) {
+              const replyTranslation = extractFromBrackets(replyLine);
+              newTranslations.set(`assistant-${assistantIndex}-reply`, replyTranslation);
+            }
+          }
+          if (data.question_es && data.translation_en.includes('question:')) {
+            const questionLine = data.translation_en.split('question:')[1]?.trim();
+            if (questionLine) {
+              const questionTranslation = extractFromBrackets(questionLine);
+              newTranslations.set(`assistant-${assistantIndex}-question`, questionTranslation);
+            }
+          }
+          
+          // Update translations state
+          if (newTranslations.size > 0) {
+            setTranslations(prev => {
+              const updated = new Map(prev);
+              newTranslations.forEach((value, key) => updated.set(key, value));
+              return updated;
+            });
+          }
+        }
+        
+        return newMessages;
+      });
 
       // Auto-speak ALL parts of the AI response (ack, correction, reply, question)
       const allParts = [
@@ -444,14 +580,64 @@ function App() {
     }
   }, [messages, useServerTTS, showEnglish]);
 
-  // Speak function for tap-to-read sections
-  const speak = useCallback(async (text) => {
+  // Translation function
+  const translateText = useCallback(async (text) => {
+    try {
+      console.log('🔄 Translating text:', text);
+      const response = await fetch(`${API_BASE}/api/translate`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ 
+          text: text,
+          from: 'es',
+          to: 'en'
+        }),
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        console.log('✅ Translation received:', data.translation);
+        return data.translation;
+      } else {
+        console.error('❌ Translation API error:', response.status, response.statusText);
+      }
+    } catch (error) {
+      console.error('❌ Translation fetch error:', error);
+    }
+    return null;
+  }, []);
+
+  // Speak function for tap-to-read sections with instant translation display
+  const speak = useCallback(async (text, messageId) => {
+    console.log('🔊 Speaking:', { text, messageId, hasTranslation: translations.has(messageId) });
+    
+    // Mark this bubble as clicked to reveal translation
+    if (messageId) {
+      setClickedBubbles(prev => new Set(prev.add(messageId)));
+    }
+    
+    // Play the TTS
     if (useServerTTS) {
       await speakServerTTS(text, API_BASE);
     } else {
       await speakBrowserSpanish(text);
     }
-  }, [useServerTTS]);
+    
+    // Translation should already be cached from chat response
+    // If somehow not cached (shouldn't happen), get it as fallback
+    if (messageId && !translations.has(messageId)) {
+      console.log('⚠️ Translation not pre-cached for messageId:', messageId, '- fetching as fallback');
+      const translation = await translateText(text);
+      if (translation) {
+        console.log('✅ Fallback translation received:', { messageId, translation });
+        setTranslations(prev => new Map(prev.set(messageId, translation)));
+      }
+    } else if (messageId) {
+      console.log('⚡ Using pre-cached translation for:', messageId);
+    }
+  }, [useServerTTS, translations, translateText]);
 
   // Load voices on component mount (needed for some browsers)
   useEffect(() => {
@@ -467,6 +653,8 @@ function App() {
     setMessages([]);
     setTranscript('');
     setError('');
+    setTranslations(new Map()); // Clear all translations
+    setClickedBubbles(new Set()); // Clear clicked bubbles state
   }, []);
 
   return (
@@ -525,21 +713,28 @@ function App() {
       </header>
 
       {/* Chat Messages Container - Scrollable, Takes Remaining Space */}
-      <div className="flex-1 min-h-0 overflow-y-auto px-4 py-4 bg-gradient-to-b from-white to-gray-50">
-        <div className="max-w-4xl mx-auto h-full">
-          
-
-          
-          <div className="space-y-2">
+      <div 
+        className="flex-1 min-h-0 overflow-y-auto"
+        style={{
+          background: 'linear-gradient(to bottom, #eff6ff, #ffffff, #eff6ff)',
+          padding: '24px 0'
+        }}
+      >
+        <div style={{ maxWidth: '1024px', margin: '0 auto', height: '100%' }}>
+          <div style={{ display: 'flex', flexDirection: 'column' }}>
             {messages.map((message, index) => {
               
               if (message.role === 'user') {
+                const messageId = `user-${index}`;
                 return (
                   <MessageBubble 
-                    key={`user-${index}`} 
+                    key={messageId} 
                     text={message.text} 
                     isUser={true}
-                    onSpeak={speak} 
+                    onSpeak={speak}
+                    messageId={messageId}
+                    translation={translations.get(messageId)}
+                    hasBeenClicked={clickedBubbles.has(messageId)} 
                   />
                 );
               }
@@ -550,7 +745,10 @@ function App() {
                     <MessageBubble 
                       text={message.ack_es} 
                       isUser={false}
-                      onSpeak={speak} 
+                      onSpeak={speak}
+                      messageId={`assistant-${index}-ack`}
+                      translation={translations.get(`assistant-${index}-ack`)}
+                      hasBeenClicked={clickedBubbles.has(`assistant-${index}-ack`)} 
                     />
                   )}
                   {message.correction_es && (
@@ -558,21 +756,30 @@ function App() {
                       text={message.correction_es} 
                       isUser={false}
                       label="Corrección"
-                      onSpeak={speak} 
+                      onSpeak={speak}
+                      messageId={`assistant-${index}-correction`}
+                      translation={translations.get(`assistant-${index}-correction`)}
+                      hasBeenClicked={clickedBubbles.has(`assistant-${index}-correction`)} 
                     />
                   )}
                   {message.reply_es && (
                     <MessageBubble 
                       text={message.reply_es} 
                       isUser={false}
-                      onSpeak={speak} 
+                      onSpeak={speak}
+                      messageId={`assistant-${index}-reply`}
+                      translation={translations.get(`assistant-${index}-reply`)}
+                      hasBeenClicked={clickedBubbles.has(`assistant-${index}-reply`)} 
                     />
                   )}
                   {message.question_es && (
                     <MessageBubble 
                       text={message.question_es} 
                       isUser={false}
-                      onSpeak={speak} 
+                      onSpeak={speak}
+                      messageId={`assistant-${index}-question`}
+                      translation={translations.get(`assistant-${index}-question`)}
+                      hasBeenClicked={clickedBubbles.has(`assistant-${index}-question`)} 
                     />
                   )}
                   {showEnglish && message.translation_en && (
