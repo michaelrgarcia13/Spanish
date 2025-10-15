@@ -177,7 +177,7 @@ function App() {
     }
   ]);
   
-  const [transcript, setTranscript] = useState('');
+
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [useServerTTS, setUseServerTTS] = useState(isiOS); // Default ON for iOS
@@ -432,7 +432,6 @@ function App() {
 
       const sttData = await sttResponse.json();
       const userText = sttData.text || '';
-      setTranscript(userText);
 
       if (!userText.trim()) {
         setError('No speech detected. Try speaking louder or closer to the microphone.');
@@ -651,7 +650,6 @@ function App() {
 
   const clearConversation = useCallback(() => {
     setMessages([]);
-    setTranscript('');
     setError('');
     setTranslations(new Map()); // Clear all translations
     setClickedBubbles(new Set()); // Clear clicked bubbles state
@@ -799,24 +797,17 @@ function App() {
         </div>
       </div>
 
-      {/* Status/Error Bar - Fixed Height (when visible) */}
-      {(transcript || error) && (
+      {/* Error Bar - Fixed Height (when visible) */}
+      {error && (
         <div className="bg-white border-t px-4 py-2 shrink-0">
-          {transcript && (
-            <div className="max-w-4xl mx-auto">
-              <p className="text-sm text-gray-600">You said: <span className="text-gray-800 font-medium">{transcript}</span></p>
-            </div>
-          )}
-          {error && (
-            <div className="max-w-4xl mx-auto">
-              <p className="text-sm text-red-600">{error}</p>
-            </div>
-          )}
+          <div className="max-w-4xl mx-auto">
+            <p className="text-sm text-red-600">{error}</p>
+          </div>
         </div>
       )}
 
       {/* Bottom Microphone Button - Fixed Height */}
-      <div className="bg-white border-t px-4 py-6 shrink-0">
+      <div className="bg-white border-t px-4 pt-12 pb-6 shrink-0">
         <div className="max-w-4xl mx-auto text-center">
           <button
             onMouseDown={(e) => startRecording(e)}
@@ -827,7 +818,7 @@ function App() {
             onTouchCancel={(e) => isRecording && stopRecording(e)}
             disabled={isProcessing}
             className={`
-              mic-button w-40 h-16 rounded-full text-4xl transition-all duration-200 transform shadow-xl
+              mic-button rounded-full text-6xl transition-all duration-200 transform shadow-xl
               ${isRecording 
                 ? 'bg-red-500 scale-105 animate-pulse shadow-red-500/50' 
                 : 'bg-blue-500 hover:bg-blue-600 hover:scale-105 shadow-blue-500/30'
@@ -835,6 +826,13 @@ function App() {
               ${isProcessing ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}
               active:scale-95 text-white font-medium
             `}
+            style={{
+              width: '360px',
+              height: '60px',
+              minWidth: '360px',
+              minHeight: '60px',
+              marginTop: '10px'
+            }}
           >
             {isProcessing ? '⌛' : isRecording ? '⏹️' : '🎙️'}
           </button>
@@ -852,7 +850,7 @@ function App() {
               ? 'Processing...' 
               : isRecording 
                 ? 'Recording... (release to send)'
-                : 'Hold to speak in Spanish'
+                : 'Hold to speak'
             }
           </p>
         </div>
