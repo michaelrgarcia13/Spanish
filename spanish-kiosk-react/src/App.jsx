@@ -251,11 +251,18 @@ function App() {
 
     // Cleanup on unmount
     return () => {
+      console.log('Cleaning up audio resources on unmount');
       if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => track.stop());
+        streamRef.current.getTracks().forEach(track => {
+          track.stop();
+          console.log('Cleanup: stopped track', track.id);
+        });
         streamRef.current = null;
       }
       if (mediaRecorderRef.current) {
+        if (mediaRecorderRef.current.state === 'recording') {
+          mediaRecorderRef.current.stop();
+        }
         mediaRecorderRef.current = null;
       }
     };
@@ -310,8 +317,14 @@ function App() {
       
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
       
-      // Stop the test stream immediately
-      stream.getTracks().forEach(track => track.stop());
+      // Stop the test stream immediately and thoroughly clean up
+      stream.getTracks().forEach(track => {
+        track.stop();
+        console.log('Stopped test microphone track:', track.id);
+      });
+      
+      // Add a small delay to ensure cleanup on iOS
+      await new Promise(resolve => setTimeout(resolve, 100));
       
       // Store permission in localStorage
       localStorage.setItem('micPermissionGranted', 'true');
@@ -397,11 +410,17 @@ function App() {
       mediaRecorder.onstop = async () => {
         console.log('MediaRecorder stopped, processing audio...');
         
-        // Clean up the stream
+        // Clean up the stream thoroughly
         if (streamRef.current) {
-          streamRef.current.getTracks().forEach(track => track.stop());
+          streamRef.current.getTracks().forEach(track => {
+            track.stop();
+            console.log('Stopped recording track:', track.id, track.readyState);
+          });
           streamRef.current = null;
         }
+        
+        // Clear the media recorder reference
+        mediaRecorderRef.current = null;
         
         // Process the audio if we have data
         if (audioChunksRef.current.length > 0) {
@@ -442,6 +461,16 @@ function App() {
     if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
       console.log('Stopping MediaRecorder');
       mediaRecorderRef.current.stop();
+    }
+    
+    // Also immediately stop any active streams as backup
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => {
+        if (track.readyState === 'live') {
+          track.stop();
+          console.log('Force stopped active track:', track.id);
+        }
+      });
     }
   }, [isRecording]);
 
