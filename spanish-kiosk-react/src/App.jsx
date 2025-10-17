@@ -123,14 +123,6 @@ function MessageBubble({ text, isUser, label, onSpeak, messageId, translation, h
             lineHeight: '1.5'
           }}
           className={isUser ? 'user-bubble' : 'assistant-bubble'}
-          onMouseEnter={(e) => {
-            e.target.style.transform = 'scale(1.02)';
-            e.target.style.boxShadow = '0 8px 20px rgba(0, 0, 0, 0.2)';
-          }}
-          onMouseLeave={(e) => {
-            e.target.style.transform = 'scale(1)';
-            e.target.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.15)';
-          }}
         >
           <div style={{ 
             whiteSpace: 'pre-wrap',

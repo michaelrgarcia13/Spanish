@@ -40,6 +40,19 @@
   color: #1f2937;
 }
 
+/* Chat bubble hover effects with proper text handling */
+.user-bubble:hover,
+.assistant-bubble:hover {
+  transform: scale(1.02);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.2) !important;
+}
+
+.user-bubble:hover *,
+.assistant-bubble:hover * {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
 /* Only the microphone button should be non-selectable */
 .mic-button {
   -webkit-user-select: none !important;
