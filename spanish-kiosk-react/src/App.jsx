@@ -123,12 +123,6 @@ function MessageBubble({ text, isUser, label, onSpeak, messageId, translation, h
             lineHeight: '1.5'
           }}
           className={isUser ? 'user-bubble' : 'assistant-bubble'}
-          onMouseEnter={() => {
-            // Clear any existing text selection when hovering
-            if (window.getSelection) {
-              window.getSelection().removeAllRanges();
-            }
-          }}
         >
           <div style={{ 
             whiteSpace: 'pre-wrap',
@@ -193,6 +187,7 @@ function App() {
   const audioChunksRef = useRef([]);
   const streamRef = useRef(null);
   const messagesEndRef = useRef(null);
+  const abortControllerRef = useRef(null); // For canceling requests
 
   // Auto-scroll to bottom when new messages arrive
   const scrollToBottom = () => {
@@ -278,6 +273,17 @@ function App() {
       });
     }
   };
+
+  // Cancel processing function
+  const cancelProcessing = useCallback(() => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    setIsProcessing(false);
+    setError('Request cancelled');
+    console.log('Processing cancelled by user');
+  }, []);
 
   const requestMicPermissionOnce = useCallback(async () => {
     if (permissionRequested) return;
@@ -441,6 +447,11 @@ function App() {
 
   const processAudio = useCallback(async (audioBlob) => {
     setIsProcessing(true);
+    setError(''); // Clear any previous errors
+    
+    // Create abort controller for this request
+    abortControllerRef.current = new AbortController();
+    const signal = abortControllerRef.current.signal;
     
     try {
       // Send to speech-to-text
@@ -450,7 +461,10 @@ function App() {
       const sttResponse = await fetch(`${API_BASE}/stt`, {
         method: 'POST',
         body: formData,
+        signal // Add abort signal
       });
+
+      if (signal.aborted) return; // Check if cancelled
 
       if (!sttResponse.ok) {
         throw new Error(`STT failed: ${sttResponse.status}`);
@@ -474,6 +488,8 @@ function App() {
         content: msg.text || msg.content || [msg.ack_es, msg.reply_es, msg.question_es].filter(Boolean).join(' ')
       }));
 
+      if (signal.aborted) return; // Check if cancelled before chat request
+
       // Send to chat with translation flag (always request translations for pre-caching)
       const chatResponse = await fetch(`${API_BASE}/chat`, {
         method: 'POST',
@@ -482,7 +498,10 @@ function App() {
           messages: simpleHistory, 
           translate: true // Always request translations for pre-caching
         }),
+        signal // Add abort signal
       });
+
+      if (signal.aborted) return; // Check if cancelled
 
       if (!chatResponse.ok) {
         throw new Error(`Chat failed: ${chatResponse.status}`);
@@ -607,9 +626,14 @@ function App() {
 
     } catch (err) {
       console.error('Full processing error:', err);
+      if (err.name === 'AbortError') {
+        console.log('Request was cancelled');
+        return; // Don't show error for cancelled requests
+      }
       setError('Error processing audio: ' + err.message);
     } finally {
       setIsProcessing(false);
+      abortControllerRef.current = null; // Clear the abort controller
     }
   }, [messages, useServerTTS, showEnglish]);
 
@@ -690,7 +714,7 @@ function App() {
   }, []);
 
   return (
-    <div className="h-screen w-screen bg-gray-50 flex flex-col overflow-hidden">
+    <div className="h-full w-full bg-gray-50 flex flex-col overflow-hidden" style={{ height: '100vh', width: '100vw' }}>
       {/* Header - Fixed Height */}
       <header className="bg-white shadow-sm border-b px-4 py-3 shrink-0">
         <div className="flex items-center justify-between">
@@ -844,31 +868,36 @@ function App() {
       <div className="bg-white border-t px-4 pt-12 pb-6 shrink-0">
         <div className="max-w-4xl mx-auto text-center">
           <button
-            onMouseDown={(e) => startRecording(e)}
-            onMouseUp={(e) => stopRecording(e)}
-            onMouseLeave={(e) => isRecording && stopRecording(e)}
-            onTouchStart={(e) => startRecording(e)}
-            onTouchEnd={(e) => stopRecording(e)}
-            onTouchCancel={(e) => isRecording && stopRecording(e)}
-            disabled={isProcessing}
-            className={`
-              mic-button rounded-full text-6xl transition-all duration-200 transform shadow-xl
-              ${isRecording 
-                ? 'bg-red-500 scale-105 animate-pulse shadow-red-500/50' 
-                : 'bg-blue-500 hover:bg-blue-600 hover:scale-105 shadow-blue-500/30'
-              }
-              ${isProcessing ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}
-              active:scale-95 text-white font-medium
-            `}
+            onMouseDown={(e) => !isProcessing && startRecording(e)}
+            onMouseUp={(e) => !isProcessing && stopRecording(e)}
+            onMouseLeave={(e) => isRecording && !isProcessing && stopRecording(e)}
+            onTouchStart={(e) => !isProcessing && startRecording(e)}
+            onTouchEnd={(e) => !isProcessing && stopRecording(e)}
+            onTouchCancel={(e) => isRecording && !isProcessing && stopRecording(e)}
+            onClick={(e) => isProcessing && cancelProcessing()}
+            className="rounded-full text-6xl transition-all duration-200 transform shadow-xl active:scale-95 text-white font-medium cursor-pointer"
             style={{
               width: '360px',
               height: '60px',
               minWidth: '360px',
               minHeight: '60px',
-              marginTop: '10px'
+              marginTop: '10px',
+              backgroundColor: isProcessing ? '#ef4444' : '#3b82f6',
+              border: 'none',
+              outline: 'none',
+              transform: isRecording ? 'scale(1.05)' : 'scale(1)',
+              animation: isRecording ? 'pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite' : 'none',
+              boxShadow: isRecording 
+                ? '0 8px 20px rgba(59, 130, 246, 0.5)' 
+                : isProcessing
+                  ? '0 8px 20px rgba(239, 68, 68, 0.3)'
+                  : '0 4px 12px rgba(59, 130, 246, 0.3)',
+              userSelect: 'none',
+              WebkitUserSelect: 'none',
+              WebkitTouchCallout: 'none'
             }}
           >
-            {isProcessing ? '⌛' : isRecording ? '⏹️' : '🎙️'}
+            {isProcessing ? '✖️' : isRecording ? '⏹️' : '🎙️'}
           </button>
           
           <p 
@@ -881,7 +910,7 @@ function App() {
             }}
           >
             {isProcessing 
-              ? 'Processing...' 
+              ? 'Processing... (click to cancel)' 
               : isRecording 
                 ? 'Recording... (release to send)'
                 : 'Hold to speak'

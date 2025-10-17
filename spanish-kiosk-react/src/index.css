@@ -2,8 +2,23 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Enable text selection by default */
+/* Ensure full viewport usage */
+html, body {
+  height: 100vh;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  font-family: 'Open Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+}
+
+#root {
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* Apply Open Sans to all elements */
 * {
+  font-family: 'Open Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
   user-select: text;
   -webkit-user-select: text;
 }
@@ -52,28 +67,11 @@
   box-shadow: 0 8px 20px rgba(0, 0, 0, 0.2) !important;
 }
 
-/* Completely disable selection highlighting during hover */
-.user-bubble:hover,
-.assistant-bubble:hover,
-.user-bubble:hover *,
-.assistant-bubble:hover * {
+/* Only disable text selection DURING active hover, not permanently */
+.user-bubble:active,
+.assistant-bubble:active {
   user-select: none !important;
   -webkit-user-select: none !important;
-  -moz-user-select: none !important;
-  -ms-user-select: none !important;
-}
-
-/* Override any selection styling during hover */
-.user-bubble:hover ::selection,
-.assistant-bubble:hover ::selection {
-  background: transparent !important;
-  color: inherit !important;
-}
-
-.user-bubble:hover ::-moz-selection,
-.assistant-bubble:hover ::-moz-selection {
-  background: transparent !important;
-  color: inherit !important;
 }
 
 /* Only the microphone button should be non-selectable */
@@ -81,6 +79,30 @@
   -webkit-user-select: none !important;
   user-select: none !important;
   -webkit-touch-callout: none !important;
+}
+
+/* Override default button styles for mic button - let Tailwind handle colors */
+.mic-button {
+  border: none !important;
+  padding: 0 !important;
+  font-family: inherit !important;
+  background: none !important;
+  background-color: transparent !important;
+}
+
+/* Ensure default button styles don't override mic button */
+button.mic-button {
+  background: none !important;
+  background-color: transparent !important;
+  border: none !important;
+}
+
+@media (prefers-color-scheme: light) {
+  button.mic-button {
+    background: none !important;
+    background-color: transparent !important;
+    border: none !important;
+  }
 }
 
 button {
