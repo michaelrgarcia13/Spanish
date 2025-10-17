@@ -104,10 +104,24 @@ app.post('/stt', upload.single('audio'), async (req, res) => {
     const audioBuffer = req.file?.buffer;
     const filename = req.file?.originalname || 'audio.webm';
 
+    console.log('STT request received:', {
+      hasFile: !!req.file,
+      bufferSize: audioBuffer?.length || 0,
+      filename: filename,
+      mimetype: req.file?.mimetype || 'unknown'
+    });
+
+    if (!audioBuffer || audioBuffer.length === 0) {
+      console.error('No audio buffer received');
+      return res.status(400).json({ error: 'No audio data received' });
+    }
+
     const form = new FormData();
     form.append('file', new Blob([audioBuffer]), filename);
     form.append('model', OPENAI_STT_MODEL);
     form.append('language', 'es');
+
+    console.log('Sending to OpenAI STT with model:', OPENAI_STT_MODEL);
 
     const r = await fetch('https://api.openai.com/v1/audio/transcriptions', {
       method: 'POST',
@@ -115,9 +129,21 @@ app.post('/stt', upload.single('audio'), async (req, res) => {
       body: form
     });
 
-    if (!r.ok) return res.status(r.status).send(await r.text());
+    console.log('OpenAI STT response status:', r.status);
+
+    if (!r.ok) {
+      const errorText = await r.text();
+      console.error('OpenAI STT error:', errorText);
+      return res.status(r.status).send(errorText);
+    }
+    
     const data = await r.json();
-    res.json({ text: data.text || '' });
+    console.log('OpenAI STT response:', data);
+    
+    const responseText = data.text || '';
+    console.log('Transcribed text:', responseText);
+    
+    res.json({ text: responseText });
   } catch (e) {
     res.status(500).json({ error: String(e) });
   }

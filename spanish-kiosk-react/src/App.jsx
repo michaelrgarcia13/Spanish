@@ -403,40 +403,66 @@ function App() {
         }
       }
       
+      console.log('Using MIME type:', mimeType || 'browser default');
       const mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : {});
 
       mediaRecorder.ondataavailable = (event) => {
+        console.log('Data available:', event.data.size, 'bytes');
         if (event.data.size > 0) {
           audioChunksRef.current.push(event.data);
         }
       };
 
       mediaRecorder.onstop = async () => {
-        console.log('MediaRecorder stopped, processing audio...');
-        
-        // Clean up the stream thoroughly
-        if (streamRef.current) {
-          streamRef.current.getTracks().forEach(track => {
-            track.stop();
-            console.log('Stopped recording track:', track.id, track.readyState);
-          });
-          streamRef.current = null;
-        }
-        
-        // Clear the media recorder reference
-        mediaRecorderRef.current = null;
+        console.log('MediaRecorder stopped, chunks collected:', audioChunksRef.current.length);
         
         // Process the audio if we have data
         if (audioChunksRef.current.length > 0) {
-          const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+          // Use the actual MIME type from the recorder
+          const blobType = mediaRecorder.mimeType || mimeType || 'audio/webm';
+          console.log('Creating blob with type:', blobType);
+          const audioBlob = new Blob(audioChunksRef.current, { type: blobType });
+          console.log('Audio blob created:', audioBlob.size, 'bytes');
+          
+          // Clean up BEFORE processing to prevent interference
+          if (streamRef.current) {
+            streamRef.current.getTracks().forEach(track => {
+              track.stop();
+              console.log('Stopped recording track:', track.id, track.readyState);
+            });
+            streamRef.current = null;
+          }
+          mediaRecorderRef.current = null;
+          
           await processAudio(audioBlob);
+        } else {
+          console.log('No audio data collected');
+          setIsProcessing(false);
+          setError('No audio recorded. Try speaking closer to the microphone.');
+          
+          // Clean up even if no data
+          if (streamRef.current) {
+            streamRef.current.getTracks().forEach(track => track.stop());
+            streamRef.current = null;
+          }
+          mediaRecorderRef.current = null;
         }
       };
 
       mediaRecorderRef.current = mediaRecorder;
-      mediaRecorder.start();
+      
+      // Reset audio chunks before starting
+      audioChunksRef.current = [];
+      
+      // Start recording with data collection interval
+      mediaRecorder.start(1000); // Collect data every second
       setIsRecording(true);
       console.log('Recording started');
+      
+      // Additional logging for debugging
+      console.log('MediaRecorder state:', mediaRecorder.state);
+      console.log('Stream active:', stream.active);
+      console.log('Stream tracks:', stream.getTracks().map(t => ({id: t.id, kind: t.kind, enabled: t.enabled, readyState: t.readyState})));
       
     } catch (err) {
       setError('Error starting recording: ' + err.message);
@@ -488,6 +514,12 @@ function App() {
     setIsProcessing(true);
     setError(''); // Clear any previous errors
     
+    console.log('Processing audio blob:', {
+      size: audioBlob.size,
+      type: audioBlob.type,
+      lastModified: audioBlob.lastModified || 'N/A'
+    });
+    
     // Create abort controller for this request
     abortControllerRef.current = new AbortController();
     const signal = abortControllerRef.current.signal;
@@ -497,6 +529,7 @@ function App() {
       const formData = new FormData();
       formData.append('audio', audioBlob, 'audio.webm');
 
+      console.log('Sending STT request to:', `${API_BASE}/stt`);
       const sttResponse = await fetch(`${API_BASE}/stt`, {
         method: 'POST',
         body: formData,
@@ -505,11 +538,16 @@ function App() {
 
       if (signal.aborted) return; // Check if cancelled
 
+      console.log('STT response status:', sttResponse.status);
+
       if (!sttResponse.ok) {
-        throw new Error(`STT failed: ${sttResponse.status}`);
+        const errorText = await sttResponse.text();
+        console.error('STT error response:', errorText);
+        throw new Error(`STT failed: ${sttResponse.status} - ${errorText}`);
       }
 
       const sttData = await sttResponse.json();
+      console.log('STT response data:', sttData);
       const userText = sttData.text || '';
 
       // Filter out known Whisper artifacts and spurious responses
