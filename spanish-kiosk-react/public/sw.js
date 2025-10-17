@@ -1,5 +1,5 @@
 // Service Worker for Spanish Tutor PWA
-const CACHE_NAME = 'spanish-tutor-v1.0.1'; // Increment version to force cache refresh
+const CACHE_NAME = 'spanish-tutor-v1.0.2'; // Increment version to force cache refresh
 const STATIC_ASSETS = [
   '/',
   '/index.html',

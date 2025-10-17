@@ -8,6 +8,38 @@
   -webkit-user-select: text;
 }
 
+/* Custom selection colors for better visibility */
+::selection {
+  background-color: rgba(59, 130, 246, 0.3);
+  color: inherit;
+}
+
+::-moz-selection {
+  background-color: rgba(59, 130, 246, 0.3);
+  color: inherit;
+}
+
+/* Specific selection styles for chat bubbles */
+.user-bubble ::selection {
+  background-color: rgba(255, 255, 255, 0.4);
+  color: white;
+}
+
+.user-bubble ::-moz-selection {
+  background-color: rgba(255, 255, 255, 0.4);
+  color: white;
+}
+
+.assistant-bubble ::selection {
+  background-color: rgba(59, 130, 246, 0.3);
+  color: #1f2937;
+}
+
+.assistant-bubble ::-moz-selection {
+  background-color: rgba(59, 130, 246, 0.3);
+  color: #1f2937;
+}
+
 /* Only the microphone button should be non-selectable */
 .mic-button {
   -webkit-user-select: none !important;

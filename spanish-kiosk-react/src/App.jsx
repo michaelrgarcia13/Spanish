@@ -122,6 +122,7 @@ function MessageBubble({ text, isUser, label, onSpeak, messageId, translation, h
             fontWeight: '500',
             lineHeight: '1.5'
           }}
+          className={isUser ? 'user-bubble' : 'assistant-bubble'}
           onMouseEnter={(e) => {
             e.target.style.transform = 'scale(1.02)';
             e.target.style.boxShadow = '0 8px 20px rgba(0, 0, 0, 0.2)';
@@ -287,14 +288,23 @@ function App() {
       setPermissionRequested(true);
       console.log('Requesting microphone permission...');
       
-      const stream = await navigator.mediaDevices.getUserMedia({
+      // Enhanced audio constraints for better mobile compatibility
+      const constraints = {
         audio: {
-          sampleRate: 16000,
+          sampleRate: { ideal: 16000, min: 8000, max: 48000 },
           channelCount: 1,
           echoCancellation: true,
           noiseSuppression: true,
+          autoGainControl: true,
+          // iOS-specific optimizations
+          ...(isiOS && {
+            sampleSize: 16,
+            volume: 1.0
+          })
         }
-      });
+      };
+      
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
       
       // Stop the test stream immediately
       stream.getTracks().forEach(track => track.stop());
@@ -339,22 +349,40 @@ function App() {
       // Prime TTS on first user interaction
       await primeTTSGesture();
 
-      // Request a fresh stream for this recording session
-      const stream = await navigator.mediaDevices.getUserMedia({
+      // Request a fresh stream for this recording session with mobile-compatible constraints
+      const constraints = {
         audio: {
-          sampleRate: 16000,
+          sampleRate: { ideal: 16000, min: 8000, max: 48000 },
           channelCount: 1,
           echoCancellation: true,
           noiseSuppression: true,
+          autoGainControl: true,
+          // iOS-specific optimizations
+          ...(isiOS && {
+            sampleSize: 16,
+            volume: 1.0
+          })
         }
-      });
+      };
+      
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
 
       streamRef.current = stream;
       audioChunksRef.current = [];
 
-      const mediaRecorder = new MediaRecorder(stream, {
-        mimeType: 'audio/webm;codecs=opus'
-      });
+      // Use compatible MIME type for mobile devices
+      let mimeType = 'audio/webm;codecs=opus';
+      if (!MediaRecorder.isTypeSupported(mimeType)) {
+        mimeType = 'audio/webm';
+        if (!MediaRecorder.isTypeSupported(mimeType)) {
+          mimeType = 'audio/mp4';
+          if (!MediaRecorder.isTypeSupported(mimeType)) {
+            mimeType = ''; // Let browser choose
+          }
+        }
+      }
+      
+      const mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : {});
 
       mediaRecorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
@@ -544,6 +572,7 @@ function App() {
       });
 
       // Auto-speak ALL parts of the AI response (ack, correction, reply, question)
+      // Note: Mobile Safari blocks autoplay, so this only works on desktop or after user interaction
       const allParts = [
         data.ack_es,
         data.correction_es,
@@ -555,6 +584,13 @@ function App() {
         // Add a small delay to ensure the UI updates first, then speak each part
         setTimeout(async () => {
           try {
+            // Check if we're on mobile - if so, skip auto-TTS (iOS blocks autoplay)
+            const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+            if (isMobile) {
+              console.log('Mobile device detected - skipping auto-TTS (tap bubbles to hear audio)');
+              return;
+            }
+            
             for (const part of allParts) {
               console.log('Speaking part:', part.substring(0, 50) + '...');
               if (useServerTTS) {
