@@ -41,16 +41,39 @@
 }
 
 /* Chat bubble hover effects with proper text handling */
+.user-bubble,
+.assistant-bubble {
+  transition: all 0.2s ease;
+}
+
 .user-bubble:hover,
 .assistant-bubble:hover {
   transform: scale(1.02);
   box-shadow: 0 8px 20px rgba(0, 0, 0, 0.2) !important;
 }
 
+/* Completely disable selection highlighting during hover */
+.user-bubble:hover,
+.assistant-bubble:hover,
 .user-bubble:hover *,
 .assistant-bubble:hover * {
-  user-select: none;
-  -webkit-user-select: none;
+  user-select: none !important;
+  -webkit-user-select: none !important;
+  -moz-user-select: none !important;
+  -ms-user-select: none !important;
+}
+
+/* Override any selection styling during hover */
+.user-bubble:hover ::selection,
+.assistant-bubble:hover ::selection {
+  background: transparent !important;
+  color: inherit !important;
+}
+
+.user-bubble:hover ::-moz-selection,
+.assistant-bubble:hover ::-moz-selection {
+  background: transparent !important;
+  color: inherit !important;
 }
 
 /* Only the microphone button should be non-selectable */

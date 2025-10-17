@@ -123,6 +123,12 @@ function MessageBubble({ text, isUser, label, onSpeak, messageId, translation, h
             lineHeight: '1.5'
           }}
           className={isUser ? 'user-bubble' : 'assistant-bubble'}
+          onMouseEnter={() => {
+            // Clear any existing text selection when hovering
+            if (window.getSelection) {
+              window.getSelection().removeAllRanges();
+            }
+          }}
         >
           <div style={{ 
             whiteSpace: 'pre-wrap',
