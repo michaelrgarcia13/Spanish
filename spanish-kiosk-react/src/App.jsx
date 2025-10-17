@@ -502,7 +502,40 @@ function App() {
       const sttData = await sttResponse.json();
       const userText = sttData.text || '';
 
-      if (!userText.trim()) {
+      // Filter out known Whisper artifacts and spurious responses
+      const isSpuriousResponse = (text) => {
+        const lowerText = text.toLowerCase().trim();
+        const spuriousPatterns = [
+          // Amara.org subtitle artifacts
+          'subtítulos realizados por la comunidad de amara.org',
+          'subtitulos realizados por la comunidad de amara.org',
+          'subtitles made by the amara.org community',
+          'subtitles by amara.org',
+          // Other common Whisper artifacts
+          'thank you for watching',
+          'thanks for watching',
+          'transcribed by',
+          'captioned by',
+          'www.amara.org',
+          'amara.org',
+          // Very short meaningless responses
+          '.',
+          ',',
+          '?',
+          '!',
+          'um',
+          'uh',
+          'mm',
+          'hmm'
+        ];
+        
+        // Check if text matches any spurious patterns
+        return spuriousPatterns.some(pattern => 
+          lowerText.includes(pattern) || lowerText === pattern
+        ) || lowerText.length < 2; // Also filter very short responses
+      };
+
+      if (!userText.trim() || isSpuriousResponse(userText)) {
         setError('No speech detected. Try speaking louder or closer to the microphone.');
         return;
       }
