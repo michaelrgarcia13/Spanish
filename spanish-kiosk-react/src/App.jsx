@@ -579,9 +579,15 @@ function App() {
         ];
         
         // Check if text matches any spurious patterns
-        return spuriousPatterns.some(pattern => 
-          lowerText.includes(pattern) || lowerText === pattern
-        ) || lowerText.length < 2; // Also filter very short responses
+        // For punctuation-only patterns, use exact match; for others use includes
+        const punctuationOnly = ['.', ',', '?', '!'];
+        return spuriousPatterns.some(pattern => {
+          if (punctuationOnly.includes(pattern)) {
+            return lowerText === pattern; // Exact match for punctuation
+          } else {
+            return lowerText.includes(pattern); // Includes match for phrases
+          }
+        }) || lowerText.length < 2; // Also filter very short responses
       };
 
       const isSpurious = isSpuriousResponse(userText);
