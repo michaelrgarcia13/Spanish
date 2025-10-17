@@ -180,6 +180,7 @@ function App() {
   const [deferredPrompt, setDeferredPrompt] = useState(null);
   const [micPermissionGranted, setMicPermissionGranted] = useState(false);
   const [permissionRequested, setPermissionRequested] = useState(false);
+  const [isRequestingPermission, setIsRequestingPermission] = useState(false); // New state for permission flow
   const [translations, setTranslations] = useState(new Map()); // Track translations for messages
   const [clickedBubbles, setClickedBubbles] = useState(new Set()); // Track which bubbles have been clicked
 
@@ -293,9 +294,10 @@ function App() {
   }, []);
 
   const requestMicPermissionOnce = useCallback(async () => {
-    if (permissionRequested) return;
+    if (permissionRequested || isRequestingPermission) return;
     
     try {
+      setIsRequestingPermission(true);
       setPermissionRequested(true);
       console.log('Requesting microphone permission...');
       
@@ -335,8 +337,10 @@ function App() {
       console.error('Microphone permission denied:', err);
       setError('Microphone permission denied. Please enable it in your browser settings.');
       setPermissionRequested(false);
+    } finally {
+      setIsRequestingPermission(false);
     }
-  }, [permissionRequested]);
+  }, [permissionRequested, isRequestingPermission]);
 
   const startRecording = useCallback(async (e) => {
     // Prevent default behavior and stop event propagation
@@ -345,20 +349,20 @@ function App() {
       e.stopPropagation();
     }
 
-    // Prevent starting if already recording or processing
-    if (isRecording || isProcessing) {
-      console.log('Already recording or processing, ignoring start request');
+    // Prevent starting if already recording, processing, or requesting permission
+    if (isRecording || isProcessing || isRequestingPermission) {
+      console.log('Already recording, processing, or requesting permission - ignoring start request');
       return;
     }
 
-    // Request permission if not granted yet
+    // If permission not granted, request it but DON'T start recording yet
     if (!micPermissionGranted) {
-      console.log('Requesting microphone permission first...');
+      console.log('Microphone permission needed - requesting permission only');
       await requestMicPermissionOnce();
-      if (!micPermissionGranted) return; // Permission was denied
+      return; // Exit here - user will need to press button again after permission granted
     }
 
-    console.log('Starting recording...');
+    console.log('Starting recording with existing permission...');
     
     try {
       setError('');
@@ -450,6 +454,12 @@ function App() {
 
     console.log('Stopping recording...');
     
+    // If we're requesting permission, ignore stop recording
+    if (isRequestingPermission) {
+      console.log('Currently requesting permission, ignoring stop request');
+      return;
+    }
+    
     if (!isRecording) {
       console.log('Not recording, ignoring stop request');
       return;
@@ -472,7 +482,7 @@ function App() {
         }
       });
     }
-  }, [isRecording]);
+  }, [isRecording, isRequestingPermission]);
 
   const processAudio = useCallback(async (audioBlob) => {
     setIsProcessing(true);
@@ -930,13 +940,14 @@ function App() {
       <div className="bg-white border-t px-4 pt-12 pb-6 shrink-0">
         <div className="max-w-4xl mx-auto text-center">
           <button
-            onMouseDown={(e) => !isProcessing && startRecording(e)}
-            onMouseUp={(e) => !isProcessing && stopRecording(e)}
-            onMouseLeave={(e) => isRecording && !isProcessing && stopRecording(e)}
-            onTouchStart={(e) => !isProcessing && startRecording(e)}
-            onTouchEnd={(e) => !isProcessing && stopRecording(e)}
-            onTouchCancel={(e) => isRecording && !isProcessing && stopRecording(e)}
+            onMouseDown={(e) => !isProcessing && !isRequestingPermission && startRecording(e)}
+            onMouseUp={(e) => !isProcessing && !isRequestingPermission && stopRecording(e)}
+            onMouseLeave={(e) => isRecording && !isProcessing && !isRequestingPermission && stopRecording(e)}
+            onTouchStart={(e) => !isProcessing && !isRequestingPermission && startRecording(e)}
+            onTouchEnd={(e) => !isProcessing && !isRequestingPermission && stopRecording(e)}
+            onTouchCancel={(e) => isRecording && !isProcessing && !isRequestingPermission && stopRecording(e)}
             onClick={(e) => isProcessing && cancelProcessing()}
+            disabled={isRequestingPermission}
             className="rounded-full text-6xl transition-all duration-200 transform shadow-xl active:scale-95 text-white font-medium cursor-pointer"
             style={{
               width: '360px',
@@ -944,7 +955,11 @@ function App() {
               minWidth: '360px',
               minHeight: '60px',
               marginTop: '10px',
-              backgroundColor: isProcessing ? '#ef4444' : '#3b82f6',
+              backgroundColor: isRequestingPermission 
+                ? '#9ca3af' 
+                : isProcessing 
+                  ? '#ef4444' 
+                  : '#3b82f6',
               border: 'none',
               outline: 'none',
               transform: isRecording ? 'scale(1.05)' : 'scale(1)',
@@ -956,10 +971,11 @@ function App() {
                   : '0 4px 12px rgba(59, 130, 246, 0.3)',
               userSelect: 'none',
               WebkitUserSelect: 'none',
-              WebkitTouchCallout: 'none'
+              WebkitTouchCallout: 'none',
+              opacity: isRequestingPermission ? 0.6 : 1
             }}
           >
-            {isProcessing ? '✖️' : isRecording ? '⏹️' : '🎙️'}
+            {isRequestingPermission ? '🔐' : isProcessing ? '✖️' : isRecording ? '⏹️' : '🎙️'}
           </button>
           
           <p 
@@ -971,11 +987,15 @@ function App() {
               msUserSelect: 'text'
             }}
           >
-            {isProcessing 
-              ? 'Processing... (click to cancel)' 
-              : isRecording 
-                ? 'Recording... (release to send)'
-                : 'Hold to speak'
+            {isRequestingPermission
+              ? 'Requesting microphone permission...'
+              : isProcessing 
+                ? 'Processing... (click to cancel)' 
+                : isRecording 
+                  ? 'Recording... (release to send)'
+                  : micPermissionGranted 
+                    ? 'Hold to speak'
+                    : 'Press to request microphone access'
             }
           </p>
         </div>
