@@ -549,6 +549,7 @@ function App() {
       const sttData = await sttResponse.json();
       console.log('STT response data:', sttData);
       const userText = sttData.text || '';
+      console.log('Extracted user text:', userText);
 
       // Filter out known Whisper artifacts and spurious responses
       const isSpuriousResponse = (text) => {
@@ -583,10 +584,22 @@ function App() {
         ) || lowerText.length < 2; // Also filter very short responses
       };
 
-      if (!userText.trim() || isSpuriousResponse(userText)) {
+      const isSpurious = isSpuriousResponse(userText);
+      console.log('Text filtering check:', {
+        text: userText,
+        trimmed: userText.trim(),
+        isEmpty: !userText.trim(),
+        isSpurious: isSpurious,
+        willBeFiltered: !userText.trim() || isSpurious
+      });
+
+      if (!userText.trim() || isSpurious) {
+        console.log('Text filtered out as spurious or empty');
         setError('No speech detected. Try speaking louder or closer to the microphone.');
         return;
       }
+
+      console.log('Text passed filtering, processing message...');
 
       // Add user message
       const newUserMessage = { role: 'user', text: userText };
