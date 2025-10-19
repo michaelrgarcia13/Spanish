@@ -512,6 +512,7 @@ function App() {
 
   const processAudio = useCallback(async (audioBlob) => {
     setIsProcessing(true);
+    setIsRecording(false); // Ensure recording state is cleared when processing starts
     setError(''); // Clear any previous errors
     
     console.log('Processing audio blob:', {
@@ -762,7 +763,24 @@ function App() {
       setError('Error processing audio: ' + err.message);
     } finally {
       setIsProcessing(false);
+      setIsRecording(false); // Ensure recording state is cleared
       abortControllerRef.current = null; // Clear the abort controller
+      
+      // Final cleanup of any remaining media resources
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+        console.log('Force stopping MediaRecorder in finally block');
+        mediaRecorderRef.current.stop();
+      }
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => {
+          if (track.readyState === 'live') {
+            track.stop();
+            console.log('Force stopped track in finally block:', track.id);
+          }
+        });
+        streamRef.current = null;
+      }
+      mediaRecorderRef.current = null;
     }
   }, [messages, useServerTTS, showEnglish]);
 
@@ -998,11 +1016,11 @@ function App() {
         <div className="max-w-4xl mx-auto text-center">
           <button
             onMouseDown={(e) => !isProcessing && !isRequestingPermission && startRecording(e)}
-            onMouseUp={(e) => !isProcessing && !isRequestingPermission && stopRecording(e)}
-            onMouseLeave={(e) => isRecording && !isProcessing && !isRequestingPermission && stopRecording(e)}
+            onMouseUp={(e) => !isRequestingPermission && stopRecording(e)}
+            onMouseLeave={(e) => isRecording && !isRequestingPermission && stopRecording(e)}
             onTouchStart={(e) => !isProcessing && !isRequestingPermission && startRecording(e)}
-            onTouchEnd={(e) => !isProcessing && !isRequestingPermission && stopRecording(e)}
-            onTouchCancel={(e) => isRecording && !isProcessing && !isRequestingPermission && stopRecording(e)}
+            onTouchEnd={(e) => !isRequestingPermission && stopRecording(e)}
+            onTouchCancel={(e) => isRecording && !isRequestingPermission && stopRecording(e)}
             onClick={(e) => isProcessing && cancelProcessing()}
             disabled={isRequestingPermission}
             className="rounded-full text-6xl transition-all duration-200 transform shadow-xl active:scale-95 text-white font-medium cursor-pointer"
