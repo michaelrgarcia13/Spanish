@@ -102,13 +102,14 @@ app.post('/chat', async (req, res) => {
 app.post('/stt', upload.single('audio'), async (req, res) => {
   try {
     const audioBuffer = req.file?.buffer;
-    const filename = req.file?.originalname || 'audio.webm';
+    const originalFilename = req.file?.originalname || 'audio.webm';
+    const mimetype = req.file?.mimetype || 'audio/webm';
 
     console.log('STT request received:', {
       hasFile: !!req.file,
       bufferSize: audioBuffer?.length || 0,
-      filename: filename,
-      mimetype: req.file?.mimetype || 'unknown'
+      originalFilename: originalFilename,
+      mimetype: mimetype
     });
 
     if (!audioBuffer || audioBuffer.length === 0) {
@@ -116,8 +117,20 @@ app.post('/stt', upload.single('audio'), async (req, res) => {
       return res.status(400).json({ error: 'No audio data received' });
     }
 
+    // Use a more compatible filename based on MIME type
+    let filename = 'audio.webm'; // Default
+    if (mimetype.includes('mp4')) {
+      filename = 'audio.mp4';
+    } else if (mimetype.includes('wav')) {
+      filename = 'audio.wav';
+    } else if (mimetype.includes('ogg')) {
+      filename = 'audio.ogg';
+    }
+
+    console.log('Using filename for OpenAI:', filename);
+
     const form = new FormData();
-    form.append('file', new Blob([audioBuffer]), filename);
+    form.append('file', new Blob([audioBuffer], { type: mimetype }), filename);
     form.append('model', OPENAI_STT_MODEL);
     form.append('language', 'es');
 
@@ -133,7 +146,14 @@ app.post('/stt', upload.single('audio'), async (req, res) => {
 
     if (!r.ok) {
       const errorText = await r.text();
-      console.error('OpenAI STT error:', errorText);
+      console.error('OpenAI STT error details:', {
+        status: r.status,
+        statusText: r.statusText,
+        error: errorText,
+        sentFilename: filename,
+        sentMimetype: mimetype,
+        bufferSize: audioBuffer.length
+      });
       return res.status(r.status).send(errorText);
     }
     

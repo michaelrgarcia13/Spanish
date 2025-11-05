@@ -357,9 +357,14 @@ function App() {
 
     // If permission not granted, request it but DON'T start recording yet
     if (!micPermissionGranted) {
-      console.log('Microphone permission needed - requesting permission only');
-      await requestMicPermissionOnce();
-      return; // Exit here - user will need to press button again after permission granted
+      console.log('Microphone permission needed - requesting permission only (no recording will start)');
+      try {
+        await requestMicPermissionOnce();
+        console.log('Permission request completed - user must press button again to record');
+      } catch (err) {
+        console.error('Permission request failed:', err);
+      }
+      return; // Always exit here - user will need to press button again after permission granted
     }
 
     console.log('Starting recording with existing permission...');
@@ -391,19 +396,35 @@ function App() {
       streamRef.current = stream;
       audioChunksRef.current = [];
 
-      // Use compatible MIME type for mobile devices
-      let mimeType = 'audio/webm;codecs=opus';
-      if (!MediaRecorder.isTypeSupported(mimeType)) {
-        mimeType = 'audio/webm';
-        if (!MediaRecorder.isTypeSupported(mimeType)) {
-          mimeType = 'audio/mp4';
-          if (!MediaRecorder.isTypeSupported(mimeType)) {
-            mimeType = ''; // Let browser choose
-          }
+      // Try MIME types in order of OpenAI Whisper compatibility
+      const mimeTypesToTry = [
+        'audio/wav',           // Most compatible
+        'audio/mp4',           // Very compatible
+        'audio/webm',          // Compatible but less reliable
+        'audio/ogg',           // Fallback
+        'audio/webm;codecs=opus' // Last resort
+      ];
+      
+      console.log('MediaRecorder MIME type support check:');
+      mimeTypesToTry.forEach(type => {
+        console.log(`  ${type}: ${MediaRecorder.isTypeSupported(type) ? '✅ Supported' : '❌ Not supported'}`);
+      });
+      
+      let mimeType = '';
+      for (const type of mimeTypesToTry) {
+        if (MediaRecorder.isTypeSupported(type)) {
+          mimeType = type;
+          break;
         }
       }
       
-      console.log('Using MIME type:', mimeType || 'browser default');
+      // If no specific type supported, let browser choose
+      if (!mimeType) {
+        mimeType = ''; 
+        console.log('No preferred MIME type supported, using browser default');
+      } else {
+        console.log('Selected MIME type:', mimeType);
+      }
       const mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : {});
 
       mediaRecorder.ondataavailable = (event) => {
@@ -1015,13 +1036,21 @@ function App() {
       <div className="bg-white border-t px-4 pt-12 pb-6 shrink-0">
         <div className="max-w-4xl mx-auto text-center">
           <button
-            onMouseDown={(e) => !isProcessing && !isRequestingPermission && startRecording(e)}
+            onMouseDown={(e) => !isProcessing && !isRequestingPermission && micPermissionGranted && startRecording(e)}
             onMouseUp={(e) => !isRequestingPermission && stopRecording(e)}
             onMouseLeave={(e) => isRecording && !isRequestingPermission && stopRecording(e)}
-            onTouchStart={(e) => !isProcessing && !isRequestingPermission && startRecording(e)}
+            onTouchStart={(e) => !isProcessing && !isRequestingPermission && micPermissionGranted && startRecording(e)}
             onTouchEnd={(e) => !isRequestingPermission && stopRecording(e)}
             onTouchCancel={(e) => isRecording && !isRequestingPermission && stopRecording(e)}
-            onClick={(e) => isProcessing && cancelProcessing()}
+            onClick={(e) => {
+              if (isProcessing) {
+                cancelProcessing();
+              } else if (!micPermissionGranted && !isRequestingPermission) {
+                // Handle permission request on click for users who don't want to press and hold
+                console.log('Click detected for permission request');
+                requestMicPermissionOnce();
+              }
+            }}
             disabled={isRequestingPermission}
             className="rounded-full text-6xl transition-all duration-200 transform shadow-xl active:scale-95 text-white font-medium cursor-pointer"
             style={{
