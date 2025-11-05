@@ -342,6 +342,29 @@ function App() {
     }
   }, [permissionRequested, isRequestingPermission]);
 
+  const handleButtonPress = useCallback(async (e) => {
+    // Prevent default behavior and stop event propagation
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+
+    // If permission not granted, request it but DON'T start recording yet
+    if (!micPermissionGranted) {
+      console.log('Microphone permission needed - requesting permission only');
+      try {
+        await requestMicPermissionOnce();
+        console.log('Permission request completed - button ready for recording');
+      } catch (err) {
+        console.error('Permission request failed:', err);
+      }
+      return; // Exit - user must press button again to record
+    }
+
+    // If permission is granted, start recording immediately
+    return startRecording(e);
+  }, [micPermissionGranted, requestMicPermissionOnce]);
+
   const startRecording = useCallback(async (e) => {
     // Prevent default behavior and stop event propagation
     if (e) {
@@ -355,16 +378,10 @@ function App() {
       return;
     }
 
-    // If permission not granted, request it but DON'T start recording yet
+    // Must have permission to record
     if (!micPermissionGranted) {
-      console.log('Microphone permission needed - requesting permission only (no recording will start)');
-      try {
-        await requestMicPermissionOnce();
-        console.log('Permission request completed - user must press button again to record');
-      } catch (err) {
-        console.error('Permission request failed:', err);
-      }
-      return; // Always exit here - user will need to press button again after permission granted
+      console.log('No microphone permission - cannot start recording');
+      return;
     }
 
     console.log('Starting recording with existing permission...');
@@ -490,7 +507,7 @@ function App() {
       setIsRecording(false);
       console.error('Recording error:', err);
     }
-  }, [isRecording, isProcessing, micPermissionGranted, requestMicPermissionOnce]);
+  }, [isRecording, isProcessing, micPermissionGranted]);
 
   const stopRecording = useCallback((e) => {
     // Prevent default behavior and stop event propagation
@@ -533,7 +550,6 @@ function App() {
 
   const processAudio = useCallback(async (audioBlob) => {
     setIsProcessing(true);
-    setIsRecording(false); // Ensure recording state is cleared when processing starts
     setError(''); // Clear any previous errors
     
     console.log('Processing audio blob:', {
@@ -784,24 +800,7 @@ function App() {
       setError('Error processing audio: ' + err.message);
     } finally {
       setIsProcessing(false);
-      setIsRecording(false); // Ensure recording state is cleared
       abortControllerRef.current = null; // Clear the abort controller
-      
-      // Final cleanup of any remaining media resources
-      if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
-        console.log('Force stopping MediaRecorder in finally block');
-        mediaRecorderRef.current.stop();
-      }
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => {
-          if (track.readyState === 'live') {
-            track.stop();
-            console.log('Force stopped track in finally block:', track.id);
-          }
-        });
-        streamRef.current = null;
-      }
-      mediaRecorderRef.current = null;
     }
   }, [messages, useServerTTS, showEnglish]);
 
@@ -1036,19 +1035,15 @@ function App() {
       <div className="bg-white border-t px-4 pt-12 pb-6 shrink-0">
         <div className="max-w-4xl mx-auto text-center">
           <button
-            onMouseDown={(e) => !isProcessing && !isRequestingPermission && micPermissionGranted && startRecording(e)}
+            onMouseDown={(e) => !isProcessing && !isRequestingPermission && handleButtonPress(e)}
             onMouseUp={(e) => !isRequestingPermission && stopRecording(e)}
             onMouseLeave={(e) => isRecording && !isRequestingPermission && stopRecording(e)}
-            onTouchStart={(e) => !isProcessing && !isRequestingPermission && micPermissionGranted && startRecording(e)}
+            onTouchStart={(e) => !isProcessing && !isRequestingPermission && handleButtonPress(e)}
             onTouchEnd={(e) => !isRequestingPermission && stopRecording(e)}
             onTouchCancel={(e) => isRecording && !isRequestingPermission && stopRecording(e)}
             onClick={(e) => {
               if (isProcessing) {
                 cancelProcessing();
-              } else if (!micPermissionGranted && !isRequestingPermission) {
-                // Handle permission request on click for users who don't want to press and hold
-                console.log('Click detected for permission request');
-                requestMicPermissionOnce();
               }
             }}
             disabled={isRequestingPermission}
