@@ -159,13 +159,12 @@ function MessageBubble({ text, isUser, label, onSpeak, messageId, translation, h
 }
 
 function App() {
-  // Initialize with a structured greeting
+  // Initialize with a structured greeting using new simplified format
   const [messages, setMessages] = useState([
     { 
       role: "assistant", 
-      ack_es: "¡Hola! 😊 Soy tu tutor de español.", 
-      reply_es: "Dime tu nombre y cómo te sientes hoy.", 
-      question_es: "", 
+      correction_es: null,
+      reply_es: "¡Hola! 😊 Soy tu tutor de español. Dime tu nombre y cómo te sientes hoy.", 
       needs_correction: false 
     }
   ]);
@@ -689,7 +688,7 @@ function App() {
       // Convert to simple format for backend
       const simpleHistory = [...messages, { role: 'user', content: userText }].map(msg => ({
         role: msg.role,
-        content: msg.text || msg.content || [msg.ack_es, msg.reply_es, msg.question_es].filter(Boolean).join(' ')
+        content: msg.text || msg.content || [msg.correction_es, msg.reply_es].filter(Boolean).join(' ')
       }));
 
       if (signal.aborted) return; // Check if cancelled before chat request
@@ -713,13 +712,11 @@ function App() {
 
       const data = await chatResponse.json();
       
-      // Add structured assistant response
+      // Add structured assistant response with new simplified format
       const assistantMessage = {
         role: 'assistant',
-        ack_es: data.ack_es || '',
-        correction_es: data.correction_es,
-        reply_es: data.reply_es || '',
-        question_es: data.question_es || '',
+        correction_es: data.correction_es, // Only if correction needed
+        reply_es: data.reply_es || '',      // Main response (always present)
         translation_en: data.translation_en,
         needs_correction: !!data.needs_correction
       };
@@ -750,13 +747,6 @@ function App() {
             return match ? match[1] : text.trim();
           };
           
-          if (data.ack_es && data.translation_en.includes('acknowledgment:')) {
-            const ackLine = data.translation_en.split('acknowledgment:')[1]?.split('\n')[0]?.trim();
-            if (ackLine) {
-              const ackTranslation = extractFromBrackets(ackLine);
-              newTranslations.set(`assistant-${assistantIndex}-ack`, ackTranslation);
-            }
-          }
           if (data.correction_es && data.translation_en.includes('correction:')) {
             const correctionLine = data.translation_en.split('correction:')[1]?.split('\n')[0]?.trim();
             if (correctionLine) {
@@ -765,17 +755,10 @@ function App() {
             }
           }
           if (data.reply_es && data.translation_en.includes('reply:')) {
-            const replyLine = data.translation_en.split('reply:')[1]?.split('\n')[0]?.trim();
+            const replyLine = data.translation_en.split('reply:')[1]?.trim();
             if (replyLine) {
               const replyTranslation = extractFromBrackets(replyLine);
               newTranslations.set(`assistant-${assistantIndex}-reply`, replyTranslation);
-            }
-          }
-          if (data.question_es && data.translation_en.includes('question:')) {
-            const questionLine = data.translation_en.split('question:')[1]?.trim();
-            if (questionLine) {
-              const questionTranslation = extractFromBrackets(questionLine);
-              newTranslations.set(`assistant-${assistantIndex}-question`, questionTranslation);
             }
           }
           
@@ -792,13 +775,11 @@ function App() {
         return newMessages;
       });
 
-      // Auto-speak ALL parts of the AI response (ack, correction, reply, question)
+      // Auto-speak parts of the AI response (correction first if exists, then reply)
       // Note: Mobile Safari blocks autoplay, so this only works on desktop or after user interaction
       const allParts = [
-        data.ack_es,
-        data.correction_es,
-        data.reply_es,
-        data.question_es
+        data.correction_es,  // Correction first if exists
+        data.reply_es        // Main reply (always present)
       ].filter(Boolean);
       
       if (allParts.length > 0) {
@@ -1001,16 +982,7 @@ function App() {
 
               return (
                 <div key={`assistant-${index}`} className="space-y-2">
-                  {message.ack_es && (
-                    <MessageBubble 
-                      text={message.ack_es} 
-                      isUser={false}
-                      onSpeak={speak}
-                      messageId={`assistant-${index}-ack`}
-                      translation={translations.get(`assistant-${index}-ack`)}
-                      hasBeenClicked={clickedBubbles.has(`assistant-${index}-ack`)} 
-                    />
-                  )}
+                  {/* Show correction first if it exists */}
                   {message.correction_es && (
                     <MessageBubble 
                       text={message.correction_es} 
@@ -1022,6 +994,7 @@ function App() {
                       hasBeenClicked={clickedBubbles.has(`assistant-${index}-correction`)} 
                     />
                   )}
+                  {/* Main reply (always shown) */}
                   {message.reply_es && (
                     <MessageBubble 
                       text={message.reply_es} 
@@ -1097,6 +1070,8 @@ function App() {
             }}
             onTouchStart={(e) => {
               console.log('📱 TouchStart event fired');
+              // Prevent default touch behavior that might interfere
+              e.preventDefault();
               if (!isProcessing && !isRequestingPermission) {
                 console.log('📱 TouchStart conditions met, calling handleButtonPress');
                 handleButtonPress(e);
@@ -1106,6 +1081,8 @@ function App() {
             }}
             onTouchEnd={(e) => {
               console.log('📱 TouchEnd event fired');
+              // Prevent default touch behavior
+              e.preventDefault();
               if (!isRequestingPermission) {
                 console.log('📱 TouchEnd calling stopRecording');
                 stopRecording(e);
@@ -1115,6 +1092,7 @@ function App() {
             }}
             onTouchCancel={(e) => {
               console.log('📱 TouchCancel event fired');
+              e.preventDefault();
               // Only stop recording on touch cancel if actually recording
               if (isRecording && !isRequestingPermission) {
                 console.log('📱 TouchCancel stopping recording');
@@ -1151,6 +1129,8 @@ function App() {
               userSelect: 'none',
               WebkitUserSelect: 'none',
               WebkitTouchCallout: 'none',
+              WebkitTapHighlightColor: 'transparent',
+              touchAction: 'manipulation',
               opacity: isRequestingPermission ? 0.6 : 1
             }}
           >
