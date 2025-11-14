@@ -368,10 +368,11 @@ function App() {
 
     // If permission is granted, start recording SYNCHRONOUSLY
     console.log('🎯 Permission granted, calling startRecording IMMEDIATELY');
-    startRecording(e);
-  }, [micPermissionGranted, requestMicPermissionOnce, startRecording]);
+    // Call startRecording directly without it in dependencies to avoid circular reference
+    startRecordingHandler(e);
+  }, [micPermissionGranted, isRecording, isProcessing, isRequestingPermission, requestMicPermissionOnce]);
 
-  const startRecording = useCallback(async (e) => {
+  const startRecordingHandler = useCallback(async (e) => {
     console.log('🎤 startRecording called');
     
     // Prevent default behavior and stop event propagation
