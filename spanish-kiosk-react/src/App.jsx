@@ -779,14 +779,10 @@ function App() {
       
       if (allParts.length > 0) {
         // Add a small delay to ensure the UI updates first, then speak each part
+        // Auto-TTS works on mobile because we're within the user interaction context (button press)
         setTimeout(async () => {
           try {
-            // Check if we're on mobile - if so, skip auto-TTS (iOS blocks autoplay)
-            const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-            if (isMobile) {
-              console.log('Mobile device detected - skipping auto-TTS (tap bubbles to hear audio)');
-              return;
-            }
+            console.log('🔊 Auto-playing TTS response...');
             
             for (const part of allParts) {
               console.log('Speaking part:', part.substring(0, 50) + '...');
@@ -799,7 +795,7 @@ function App() {
               await new Promise(resolve => setTimeout(resolve, 500));
             }
           } catch (e) {
-            console.log('Auto-TTS failed:', e);
+            console.log('Auto-TTS failed (user can still tap bubbles):', e);
           }
         }, 300);
       }
