@@ -342,7 +342,7 @@ function App() {
     }
   }, [permissionRequested, isRequestingPermission]);
 
-  const handleButtonPress = useCallback(async (e) => {
+  const handleButtonPress = useCallback((e) => {
     console.log('🎯 handleButtonPress called');
     
     // Prevent default behavior and stop event propagation
@@ -360,20 +360,16 @@ function App() {
 
     // If permission not granted, request it but DON'T start recording yet
     if (!micPermissionGranted) {
-      console.log('🎯 Microphone permission needed - requesting permission only');
-      try {
-        await requestMicPermissionOnce();
-        console.log('🎯 Permission request completed - button ready for recording');
-      } catch (err) {
-        console.error('🎯 Permission request failed:', err);
-      }
-      return; // Exit - user must press button again to record
+      console.log('🎯 Microphone permission needed - requesting permission only (NO RECORDING)');
+      // Request permission but don't await - this prevents recording from starting
+      requestMicPermissionOnce();
+      return; // Exit immediately - user must press button again to record
     }
 
-    // If permission is granted, start recording immediately
-    console.log('🎯 Permission granted, calling startRecording');
-    return startRecording(e);
-  }, [micPermissionGranted, requestMicPermissionOnce]);
+    // If permission is granted, start recording SYNCHRONOUSLY
+    console.log('🎯 Permission granted, calling startRecording IMMEDIATELY');
+    startRecording(e);
+  }, [micPermissionGranted, requestMicPermissionOnce, startRecording]);
 
   const startRecording = useCallback(async (e) => {
     console.log('🎤 startRecording called');
@@ -402,6 +398,9 @@ function App() {
       console.log('🎤 No microphone permission - cannot start recording');
       return;
     }
+
+    // Set recording state IMMEDIATELY for instant visual feedback
+    setIsRecording(true);
 
     console.log('Starting recording with existing permission...');
     
@@ -514,7 +513,7 @@ function App() {
       // Start recording with data collection interval
       mediaRecorder.start(1000); // Collect data every second
       recordingStartTimeRef.current = Date.now(); // Track start time
-      setIsRecording(true);
+      // Don't set isRecording again - already set for immediate feedback
       console.log('Recording started');
       
       // Additional logging for debugging
@@ -549,20 +548,13 @@ function App() {
       return;
     }
 
-    // Check minimum recording duration (500ms minimum to avoid "too short" errors)
+    // Check minimum recording duration (300ms minimum to avoid "too short" errors)
     const recordingDuration = Date.now() - (recordingStartTimeRef.current || 0);
     console.log('Recording duration:', recordingDuration + 'ms');
     
-    if (recordingDuration < 500) {
-      console.log('Recording too short (' + recordingDuration + 'ms), extending to minimum duration...');
-      // Wait a bit more before stopping to ensure minimum duration
-      setTimeout(() => {
-        if (isRecording) {
-          console.log('Now stopping after minimum duration wait');
-          stopRecording(e);
-        }
-      }, 500 - recordingDuration);
-      return;
+    if (recordingDuration < 300) {
+      console.log('Recording too short (' + recordingDuration + 'ms), will wait before processing...');
+      // Don't return - let it stop but mark it for delayed processing
     }
     
     setIsRecording(false);
@@ -571,6 +563,8 @@ function App() {
     if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
       console.log('Stopping MediaRecorder');
       mediaRecorderRef.current.stop();
+    } else {
+      console.log('MediaRecorder not in recording state:', mediaRecorderRef.current?.state);
     }
     
     // Also immediately stop any active streams as backup
@@ -1045,58 +1039,22 @@ function App() {
       <div className="bg-white border-t px-4 pt-12 pb-6 shrink-0">
         <div className="max-w-4xl mx-auto text-center">
           <button
-            onMouseDown={(e) => {
-              console.log('🖱️ MouseDown event fired');
+            onPointerDown={(e) => {
+              console.log('� PointerDown event fired');
               if (!isProcessing && !isRequestingPermission) {
-                console.log('🖱️ MouseDown conditions met, calling handleButtonPress');
+                console.log('� PointerDown conditions met, calling handleButtonPress');
                 handleButtonPress(e);
               } else {
-                console.log('🖱️ MouseDown blocked:', { isProcessing, isRequestingPermission });
+                console.log('� PointerDown blocked:', { isProcessing, isRequestingPermission });
               }
             }}
-            onMouseUp={(e) => {
-              console.log('🖱️ MouseUp event fired');
+            onPointerUp={(e) => {
+              console.log('� PointerUp event fired');
               if (!isRequestingPermission) {
-                console.log('🖱️ MouseUp calling stopRecording');
+                console.log('� PointerUp calling stopRecording');
                 stopRecording(e);
               } else {
-                console.log('🖱️ MouseUp blocked:', { isRequestingPermission });
-              }
-            }}
-            onMouseLeave={(e) => {
-              console.log('🖱️ MouseLeave event fired');
-              // Don't stop recording on mouse leave for desktop - only on mouse up
-              // This prevents accidental stopping when cursor moves slightly during press
-            }}
-            onTouchStart={(e) => {
-              console.log('📱 TouchStart event fired');
-              // Prevent default touch behavior that might interfere
-              e.preventDefault();
-              if (!isProcessing && !isRequestingPermission) {
-                console.log('📱 TouchStart conditions met, calling handleButtonPress');
-                handleButtonPress(e);
-              } else {
-                console.log('📱 TouchStart blocked:', { isProcessing, isRequestingPermission });
-              }
-            }}
-            onTouchEnd={(e) => {
-              console.log('📱 TouchEnd event fired');
-              // Prevent default touch behavior
-              e.preventDefault();
-              if (!isRequestingPermission) {
-                console.log('📱 TouchEnd calling stopRecording');
-                stopRecording(e);
-              } else {
-                console.log('📱 TouchEnd blocked:', { isRequestingPermission });
-              }
-            }}
-            onTouchCancel={(e) => {
-              console.log('📱 TouchCancel event fired');
-              e.preventDefault();
-              // Only stop recording on touch cancel if actually recording
-              if (isRecording && !isRequestingPermission) {
-                console.log('📱 TouchCancel stopping recording');
-                stopRecording(e);
+                console.log('� PointerUp blocked:', { isRequestingPermission });
               }
             }}
             onClick={(e) => {
@@ -1130,7 +1088,10 @@ function App() {
               WebkitUserSelect: 'none',
               WebkitTouchCallout: 'none',
               WebkitTapHighlightColor: 'transparent',
-              touchAction: 'manipulation',
+              touchAction: 'none',
+              WebkitUserSelect: 'none',
+              WebkitTouchCallout: 'none',
+              WebkitTapHighlightColor: 'transparent',
               opacity: isRequestingPermission ? 0.6 : 1
             }}
           >

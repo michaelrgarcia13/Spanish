@@ -79,13 +79,11 @@ app.post('/chat', async (req, res) => {
       parsed = JSON.parse(rawContent);
     } catch (e) {
       console.error('JSON parse error:', e);
-      // Fallback response if JSON parsing fails
+      // Fallback response if JSON parsing fails (new simplified format)
       parsed = { 
         ok: true, 
-        ack_es: "¡Muy bien!", 
         correction_es: null, 
-        reply_es: rawContent, 
-        question_es: "¿Puedes repetir eso?", 
+        reply_es: rawContent || "¡Muy bien! ¿Puedes repetir eso?", 
         needs_correction: false, 
         translation_en: translate ? rawContent : null 
       };
