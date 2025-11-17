@@ -502,6 +502,8 @@ function App() {
 
   const handleButtonPress = useCallback((e) => {
     console.log('🎯 handleButtonPress called');
+    console.log('🎯 micPermissionGranted:', micPermissionGranted);
+    console.log('🎯 requestMicPermissionOnce function:', typeof requestMicPermissionOnce);
     isButtonPressedRef.current = true;
     
     // Prevent default behavior and stop event propagation
@@ -520,7 +522,9 @@ function App() {
     // If permission not granted, request it ONLY - DO NOT START RECORDING
     if (!micPermissionGranted) {
       console.log('🎯 No permission - requesting permission ONLY (user must press again to record)');
+      console.log('🎯 About to call requestMicPermissionOnce()...');
       requestMicPermissionOnce();
+      console.log('🎯 requestMicPermissionOnce() called');
       return; // Exit - user must release and press again to record
     }
 
