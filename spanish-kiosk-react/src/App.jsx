@@ -504,6 +504,7 @@ function App() {
     console.log('🎯 handleButtonPress called');
     console.log('🎯 micPermissionGranted:', micPermissionGranted);
     console.log('🎯 requestMicPermissionOnce function:', typeof requestMicPermissionOnce);
+    alert('🎯 Inside handleButtonPress! micPermissionGranted: ' + micPermissionGranted);
     isButtonPressedRef.current = true;
     
     // Prevent default behavior and stop event propagation
@@ -523,6 +524,7 @@ function App() {
     if (!micPermissionGranted) {
       console.log('🎯 No permission - requesting permission ONLY (user must press again to record)');
       console.log('🎯 About to call requestMicPermissionOnce()...');
+      alert('🎯 No permission - calling requestMicPermissionOnce');
       requestMicPermissionOnce();
       console.log('🎯 requestMicPermissionOnce() called');
       return; // Exit - user must release and press again to record
@@ -531,12 +533,15 @@ function App() {
     // If already processing or requesting, ignore
     if (isProcessing || isRequestingPermission) {
       console.log('🎯 Already busy, ignoring button press');
+      alert('🎯 Already busy - ignoring');
       return;
     }
 
     // Permission granted - start recording IMMEDIATELY
     console.log('🎯 Permission exists, starting recording NOW');
+    alert('🎯 About to call startRecording!');
     startRecording(e);
+    alert('🎯 startRecording called!');
   }, [micPermissionGranted, isRecording, isProcessing, isRequestingPermission, requestMicPermissionOnce, startRecording]);
 
   const stopRecording = useCallback((e) => {
