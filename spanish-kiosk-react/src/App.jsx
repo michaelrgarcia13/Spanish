@@ -927,7 +927,6 @@ function App() {
         <div>isProcessing: {String(isProcessing)}</div>
         <div>isRequestingPermission: {String(isRequestingPermission)}</div>
         <div>permissionRequested: {String(permissionRequested)}</div>
-        <div>buttonPressed: {String(isButtonPressedRef.current)}</div>
       </div>
       
       {/* Header - Fixed Height */}
