@@ -1088,29 +1088,31 @@ function App() {
         <div className="max-w-4xl mx-auto text-center">
           <button
             onPointerDown={(e) => {
-              console.log('� PointerDown event fired');
+              console.log('👆 PointerDown event fired');
+              alert('PointerDown fired! isProcessing: ' + isProcessing + ', isRequestingPermission: ' + isRequestingPermission);
               if (!isProcessing && !isRequestingPermission) {
-                console.log('� PointerDown conditions met, calling handleButtonPress');
+                console.log('👆 PointerDown conditions met, calling handleButtonPress');
                 handleButtonPress(e);
               } else {
-                console.log('� PointerDown blocked:', { isProcessing, isRequestingPermission });
+                console.log('👆 PointerDown blocked:', { isProcessing, isRequestingPermission });
               }
             }}
             onPointerUp={(e) => {
-              console.log('� PointerUp event fired');
+              console.log('👆 PointerUp event fired');
               if (!isRequestingPermission) {
-                console.log('� PointerUp calling stopRecording');
+                console.log('👆 PointerUp calling stopRecording');
                 stopRecording(e);
               } else {
-                console.log('� PointerUp blocked:', { isRequestingPermission });
+                console.log('👆 PointerUp blocked:', { isRequestingPermission });
               }
             }}
             onClick={(e) => {
+              console.log('🖱️ onClick fired');
+              alert('onClick fired!');
               if (isProcessing) {
                 cancelProcessing();
               }
             }}
-            disabled={isRequestingPermission}
             className="rounded-full text-6xl transition-all duration-200 transform shadow-xl active:scale-95 text-white font-medium cursor-pointer"
             style={{
               width: '360px',
@@ -1143,7 +1145,9 @@ function App() {
               opacity: isRequestingPermission ? 0.6 : 1
             }}
           >
-            {isRequestingPermission ? '🔐' : isProcessing ? '✖️' : isRecording ? '⏹️' : '🎙️'}
+            <span style={{ userSelect: 'none', WebkitUserSelect: 'none', pointerEvents: 'none' }}>
+              {isRequestingPermission ? '🔐' : isProcessing ? '✖️' : isRecording ? '⏹️' : '🎙️'}
+            </span>
           </button>
           
           <p 
