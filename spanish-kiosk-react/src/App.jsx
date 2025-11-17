@@ -342,42 +342,8 @@ function App() {
     }
   }, [permissionRequested, isRequestingPermission]);
 
-  const handleButtonPress = useCallback((e) => {
-    console.log('🎯 handleButtonPress called');
-    isButtonPressedRef.current = true;
-    
-    // Prevent default behavior and stop event propagation
-    if (e) {
-      e.preventDefault();
-      e.stopPropagation();
-    }
-
-    console.log('🎯 Current state:', {
-      micPermissionGranted,
-      isRecording,
-      isProcessing,
-      isRequestingPermission
-    });
-
-    // If permission not granted, request it ONLY - DO NOT START RECORDING
-    if (!micPermissionGranted) {
-      console.log('🎯 No permission - requesting permission ONLY (user must press again to record)');
-      requestMicPermissionOnce();
-      return; // Exit - user must release and press again to record
-    }
-
-    // If already processing or requesting, ignore
-    if (isProcessing || isRequestingPermission) {
-      console.log('🎯 Already busy, ignoring button press');
-      return;
-    }
-
-    // Permission granted - start recording IMMEDIATELY
-    console.log('🎯 Permission exists, starting recording NOW');
-    startRecordingHandler(e);
-  }, [micPermissionGranted, isRecording, isProcessing, isRequestingPermission, requestMicPermissionOnce]);
-
-  const startRecordingHandler = useCallback(async (e) => {
+  // Define startRecording BEFORE handleButtonPress so it can be used in dependencies
+  const startRecording = useCallback(async (e) => {
     console.log('🎤 startRecording called');
     
     // Prevent default behavior and stop event propagation
@@ -532,7 +498,42 @@ function App() {
       setIsRecording(false);
       console.error('Recording error:', err);
     }
-  }, [isRecording, isProcessing, micPermissionGranted]);
+  }, [isRecording, isProcessing, micPermissionGranted, isRequestingPermission]);
+
+  const handleButtonPress = useCallback((e) => {
+    console.log('🎯 handleButtonPress called');
+    isButtonPressedRef.current = true;
+    
+    // Prevent default behavior and stop event propagation
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+
+    console.log('🎯 Current state:', {
+      micPermissionGranted,
+      isRecording,
+      isProcessing,
+      isRequestingPermission
+    });
+
+    // If permission not granted, request it ONLY - DO NOT START RECORDING
+    if (!micPermissionGranted) {
+      console.log('🎯 No permission - requesting permission ONLY (user must press again to record)');
+      requestMicPermissionOnce();
+      return; // Exit - user must release and press again to record
+    }
+
+    // If already processing or requesting, ignore
+    if (isProcessing || isRequestingPermission) {
+      console.log('🎯 Already busy, ignoring button press');
+      return;
+    }
+
+    // Permission granted - start recording IMMEDIATELY
+    console.log('🎯 Permission exists, starting recording NOW');
+    startRecording(e);
+  }, [micPermissionGranted, isRecording, isProcessing, isRequestingPermission, requestMicPermissionOnce, startRecording]);
 
   const stopRecording = useCallback((e) => {
     // Prevent default behavior and stop event propagation
