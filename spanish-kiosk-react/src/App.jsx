@@ -189,6 +189,8 @@ function App() {
   const messagesEndRef = useRef(null);
   const abortControllerRef = useRef(null); // For canceling requests
   const recordingStartTimeRef = useRef(null); // Track recording duration
+  const isButtonPressedRef = useRef(false); // Track button press state
+  const micPermissionGrantedRef = useRef(false); // Track mic permission to avoid stale closure
 
   // Auto-scroll to bottom when new messages arrive
   const scrollToBottom = () => {
@@ -230,6 +232,7 @@ function App() {
         const storedPermission = localStorage.getItem('micPermissionGranted');
         if (storedPermission === 'true') {
           setMicPermissionGranted(true);
+          micPermissionGrantedRef.current = true;
           console.log('Microphone permission already granted (from storage)');
           return;
         }
@@ -239,6 +242,7 @@ function App() {
           const permissionStatus = await navigator.permissions.query({ name: 'microphone' });
           if (permissionStatus.state === 'granted') {
             setMicPermissionGranted(true);
+            micPermissionGrantedRef.current = true;
             localStorage.setItem('micPermissionGranted', 'true');
             console.log('Microphone permission already granted (from browser)');
           }
@@ -331,6 +335,7 @@ function App() {
       // Store permission in localStorage
       localStorage.setItem('micPermissionGranted', 'true');
       setMicPermissionGranted(true);
+      micPermissionGrantedRef.current = true;
       console.log('Microphone permission granted and stored');
       
     } catch (err) {
@@ -502,9 +507,10 @@ function App() {
 
   const handleButtonPress = useCallback((e) => {
     console.log('🎯 handleButtonPress called');
-    console.log('🎯 micPermissionGranted:', micPermissionGranted);
+    console.log('🎯 micPermissionGranted (ref):', micPermissionGrantedRef.current);
+    console.log('🎯 micPermissionGranted (state):', micPermissionGranted);
     console.log('🎯 requestMicPermissionOnce function:', typeof requestMicPermissionOnce);
-    alert('🎯 Inside handleButtonPress! micPermissionGranted: ' + micPermissionGranted);
+    alert('🎯 Inside handleButtonPress! micPermissionGranted (ref): ' + micPermissionGrantedRef.current + ', (state): ' + micPermissionGranted);
     isButtonPressedRef.current = true;
     
     // Prevent default behavior and stop event propagation
@@ -521,7 +527,7 @@ function App() {
     });
 
     // If permission not granted, request it ONLY - DO NOT START RECORDING
-    if (!micPermissionGranted) {
+    if (!micPermissionGrantedRef.current) {
       console.log('🎯 No permission - requesting permission ONLY (user must press again to record)');
       console.log('🎯 About to call requestMicPermissionOnce()...');
       alert('🎯 No permission - calling requestMicPermissionOnce');
