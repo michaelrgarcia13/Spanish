@@ -919,6 +919,17 @@ function App() {
 
   return (
     <div className="h-full w-full bg-gray-50 flex flex-col overflow-hidden" style={{ height: '100vh', width: '100vw' }}>
+      {/* DEBUG PANEL - Remove after fixing */}
+      <div className="fixed top-0 right-0 bg-black bg-opacity-75 text-white text-xs p-2 z-50 max-w-xs">
+        <div className="font-bold mb-1">🐛 Debug Info:</div>
+        <div>micPermissionGranted: {String(micPermissionGranted)}</div>
+        <div>isRecording: {String(isRecording)}</div>
+        <div>isProcessing: {String(isProcessing)}</div>
+        <div>isRequestingPermission: {String(isRequestingPermission)}</div>
+        <div>permissionRequested: {String(permissionRequested)}</div>
+        <div>buttonPressed: {String(isButtonPressedRef.current)}</div>
+      </div>
+      
       {/* Header - Fixed Height */}
       <header className="bg-white shadow-sm border-b px-4 py-3 shrink-0">
         <div className="flex items-center justify-between">
@@ -944,6 +955,19 @@ function App() {
                 📱 Install App
               </button>
             )}
+            {/* DEBUG: Test permission button */}
+            <button
+              onClick={() => {
+                console.log('🧪 Test button clicked');
+                alert('Test button works! micPermissionGranted: ' + micPermissionGranted);
+                if (!micPermissionGranted) {
+                  requestMicPermissionOnce();
+                }
+              }}
+              className="text-xs px-2 py-1 bg-red-100 text-red-600 rounded hover:bg-red-200 transition-colors font-medium"
+            >
+              🧪 Test Mic
+            </button>
             <label className="flex items-center gap-2 text-xs text-gray-600 cursor-pointer">
               <input
                 type="checkbox"
