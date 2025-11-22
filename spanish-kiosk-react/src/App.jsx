@@ -3,136 +3,136 @@ import React, { useState, useRef, useCallback, useEffect } from 'react';
 // Get API base URL from window or default to localhost for development
 const API_BASE = window.__API_BASE__ || 'http://localhost:3000';
 
-// ---- TTS Queue Manager ----
-class TTSQueue {
+// ---- TTS Manager with iOS Autoplay Support ----
+class TTSManager {
   constructor() {
+    this.audio = null;
+    this.primed = false;
+    this.playingId = null;
     this.queue = [];
-    this.currentAudio = null;
-    this.currentMessageId = null;
-    this.isPlaying = false;
-    this.isProcessingQueue = false;
+    this.processing = false;
   }
 
-  async playServerTTS(text, apiBase) {
-    console.log('🎵 Fetching TTS for:', text.substring(0, 40));
-    const response = await fetch(`${apiBase}/tts`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text })
-    });
-    if (!response.ok) throw new Error('TTS request failed');
-    const blob = await response.blob();
-    const url = URL.createObjectURL(blob);
-    const audio = new Audio(url);
-    
-    return new Promise((resolve, reject) => {
-      audio.onended = () => {
-        console.log('✅ Audio finished playing');
-        URL.revokeObjectURL(url);
-        this.currentAudio = null;
-        resolve();
-      };
-      audio.onerror = (e) => {
-        console.error('❌ Audio error:', e);
-        URL.revokeObjectURL(url);
-        this.currentAudio = null;
-        reject(new Error('Audio playback failed'));
-      };
-      
-      this.currentAudio = audio;
-      console.log('▶️ Starting playback');
-      audio.play().catch((err) => {
-        console.error('❌ Play failed:', err);
-        reject(err);
-      });
-    });
+  ensureAudioEl() {
+    if (this.audio) return;
+    console.log('🎵 Creating audio element');
+    this.audio = document.createElement('audio');
+    this.audio.setAttribute('playsinline', '');
+    this.audio.preload = 'auto';
+    document.body.appendChild(this.audio);
   }
 
-  stopCurrent() {
-    console.log('🛑 Stopping current audio');
-    if (this.currentAudio) {
-      try {
-        this.currentAudio.pause();
-        this.currentAudio.currentTime = 0;
-        this.currentAudio = null;
-      } catch (e) {
-        console.error('Error stopping audio:', e);
-      }
-    }
-    this.currentMessageId = null;
-    this.isPlaying = false;
-  }
-
-  clearQueue() {
-    console.log('🗑️ Clearing queue');
-    this.queue = [];
-  }
-
-  async processQueue(apiBase) {
-    if (this.isProcessingQueue) {
-      console.log('⏸️ Queue already being processed');
+  // Call during user gesture to unlock autoplay
+  async prime() {
+    this.ensureAudioEl();
+    if (this.primed) {
+      console.log('✅ Audio already primed');
       return;
     }
     
-    this.isProcessingQueue = true;
-    console.log('🔄 Starting queue processing');
-    
-    while (this.queue.length > 0) {
-      const { text, messageId, resolve, reject } = this.queue.shift();
-      this.currentMessageId = messageId;
-      this.isPlaying = true;
-      
-      console.log('🔊 Playing message:', messageId, 'Queue remaining:', this.queue.length);
-      
-      try {
-        await this.playServerTTS(text, apiBase);
-        this.isPlaying = false;
-        this.currentMessageId = null;
-        resolve();
-      } catch (err) {
-        console.error('❌ TTS error:', err);
-        this.isPlaying = false;
-        this.currentMessageId = null;
-        reject(err);
+    try {
+      console.log('🔓 Priming audio element...');
+      // 50ms silent MP3 data URI
+      this.audio.src = 'data:audio/mp3;base64,//uQZAAAAAAAAAAAAAAAAAAAAAAAWGluZwAAAA8AAAACAAACcQCA//////////////////////////////////////////////////8AAAA8TEFNRTMuMTAwA8MAAAAAAAAAABSAJAMGQgAAgAAAgnEWjwvdAAAAAAAAAAAAAAAAAAAA//sQZAAP8AAAaQAAAAgAAA0gAAABAAABpAAAACAAADSAAAAETEFNRTMuMTAwVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV';
+      await this.audio.play();
+      this.audio.pause();
+      this.audio.currentTime = 0;
+      this.primed = true;
+      console.log('✅ Audio primed successfully');
+    } catch (e) {
+      console.warn('⚠️ Audio priming failed:', e.message);
+      this.primed = false;
+    }
+  }
+
+  // Enqueue TTS blob for playback
+  enqueueBlob(id, blob) {
+    console.log('➕ Enqueueing blob for:', id);
+    const url = URL.createObjectURL(blob);
+    this.queue.push({ 
+      id, 
+      url, 
+      revoke: () => {
+        console.log('🗑️ Revoking URL for:', id);
+        URL.revokeObjectURL(url);
       }
-      
+    });
+    this._process();
+  }
+
+  // Stop if same message is playing
+  stopIfPlaying(id) {
+    if (this.playingId && this.playingId === id && this.audio) {
+      console.log('🛑 Stopping currently playing message:', id);
+      try {
+        this.audio.pause();
+        this.audio.currentTime = 0;
+      } catch (e) {
+        console.error('Error pausing audio:', e);
+      }
+      this.playingId = null;
+      return true;
+    }
+    return false;
+  }
+
+  async _process() {
+    if (this.processing || !this.queue.length) {
+      if (this.processing) console.log('⏸️ Queue already processing');
+      return;
+    }
+
+    this.processing = true;
+    console.log('🔄 Starting queue processing, items:', this.queue.length);
+
+    while (this.queue.length > 0) {
+      const { id, url, revoke } = this.queue.shift();
+      this.playingId = id;
+      console.log('🔊 Playing:', id, '| Remaining:', this.queue.length);
+
+      try {
+        this.audio.src = url;
+        await this.audio.play();
+        
+        // Wait for audio to finish
+        await new Promise((resolve) => {
+          const onEnd = () => {
+            console.log('✅ Audio ended:', id);
+            cleanup();
+            resolve();
+          };
+          const onErr = (e) => {
+            console.error('❌ Audio error:', id, e);
+            cleanup();
+            resolve();
+          };
+          const cleanup = () => {
+            this.audio.removeEventListener('ended', onEnd);
+            this.audio.removeEventListener('error', onErr);
+            revoke();
+          };
+          this.audio.addEventListener('ended', onEnd, { once: true });
+          this.audio.addEventListener('error', onErr, { once: true });
+        });
+      } catch (e) {
+        console.error('❌ Playback error for', id, ':', e);
+        revoke();
+      } finally {
+        this.playingId = null;
+      }
+
       // Small pause between messages
       if (this.queue.length > 0) {
         await new Promise(resolve => setTimeout(resolve, 200));
       }
     }
-    
-    this.isProcessingQueue = false;
+
+    this.processing = false;
     console.log('✅ Queue processing complete');
-  }
-
-  speak(text, messageId, apiBase) {
-    return new Promise((resolve, reject) => {
-      console.log('🎤 Speak called:', { messageId, isPlaying: this.isPlaying, currentMessageId: this.currentMessageId });
-      
-      // If same message is currently playing, stop it and clear queue
-      if (this.currentMessageId === messageId && this.isPlaying) {
-        console.log('🛑 Same message playing - stopping everything');
-        this.stopCurrent();
-        this.clearQueue();
-        this.isProcessingQueue = false;
-        resolve();
-        return;
-      }
-
-      // Add to queue
-      console.log('➕ Adding to queue');
-      this.queue.push({ text, messageId, resolve, reject });
-      
-      // Start processing if not already processing
-      if (!this.isProcessingQueue) {
-        this.processQueue(apiBase);
-      }
-    });
   }
 }
 
-const ttsQueue = new TTSQueue();
+const ttsManager = new TTSManager();
 
 // Detect iOS for better defaults
 const isiOS = typeof navigator !== 'undefined' && /iP(hone|ad|od)/.test(navigator.userAgent);
@@ -575,11 +575,14 @@ function App() {
   }, [isRecording, isProcessing, micPermissionGranted, isRequestingPermission]);
 
   // Simple, direct button press handler - no complex dependencies
-  const handleButtonPress = useCallback((e) => {
+  const handleButtonPress = useCallback(async (e) => {
     e?.preventDefault();
     e?.stopPropagation();
     
     console.log('🎯 Button pressed - Permission:', micPermissionGrantedRef.current);
+    
+    // Prime audio element during user gesture for iOS autoplay
+    await ttsManager.prime();
     
     // Don't do anything if already busy
     if (isProcessing || isRequestingPermission || isRecording) {
@@ -859,8 +862,8 @@ function App() {
         return newMessages;
       });
 
-      // Auto-play AI response with proper message IDs (stays in gesture context)
-      // Build parts with their message IDs for proper queue management
+      // Auto-play AI response using primed audio element
+      // Fetch TTS blobs and enqueue for playback
       const partsToPlay = [];
       // Only add correction if it exists AND is not the string "null"
       if (data.correction_es && data.correction_es !== 'null') {
@@ -879,12 +882,26 @@ function App() {
       if (partsToPlay.length > 0) {
         console.log('🔊 Auto-playing AI response with IDs:', partsToPlay.map(p => p.messageId));
         console.log('🔊 Using assistant index:', actualAssistantIndex);
-        // Queue all parts immediately to maintain gesture context
-        partsToPlay.forEach(({ text, messageId }) => {
-          ttsQueue.speak(text, messageId, API_BASE).catch(e => {
-            console.error('Auto-play error for', messageId, ':', e);
-          });
-        });
+        
+        // Fetch and enqueue each part
+        for (const { text, messageId } of partsToPlay) {
+          try {
+            const response = await fetch(`${API_BASE}/tts`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ text })
+            });
+            
+            if (response.ok) {
+              const blob = await response.blob();
+              ttsManager.enqueueBlob(messageId, blob);
+            } else {
+              console.error('TTS fetch failed for', messageId, ':', response.status);
+            }
+          } catch (e) {
+            console.error('Auto-play fetch error for', messageId, ':', e);
+          }
+        }
       }
 
     } catch (err) {
@@ -929,7 +946,7 @@ function App() {
     return null;
   }, []);
 
-  // New queue-based speak function - handles tap-to-replay with queue management
+  // Speak function for bubble taps - uses primed audio element
   const speak = useCallback(async (text, messageId) => {
     console.log('🔊 Speak requested:', { text: text.substring(0, 30), messageId });
     
@@ -938,11 +955,28 @@ function App() {
       setClickedBubbles(prev => new Set(prev.add(messageId)));
     }
     
-    // Play through queue (handles stopping same message or queueing different ones)
+    // If same message is playing, stop it
+    if (ttsManager.stopIfPlaying(messageId)) {
+      console.log('🛑 Stopped currently playing message');
+      return;
+    }
+    
+    // Fetch TTS and enqueue
     try {
-      await ttsQueue.speak(text, messageId, API_BASE);
+      const response = await fetch(`${API_BASE}/tts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text })
+      });
+      
+      if (response.ok) {
+        const blob = await response.blob();
+        ttsManager.enqueueBlob(messageId, blob);
+      } else {
+        console.error('TTS fetch failed:', response.status);
+      }
     } catch (err) {
-      console.error('TTS playback error:', err);
+      console.error('TTS fetch error:', err);
     }
     
     // Fetch translation if not cached (fallback)
