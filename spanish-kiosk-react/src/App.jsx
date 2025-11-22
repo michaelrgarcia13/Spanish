@@ -3,66 +3,102 @@ import React, { useState, useRef, useCallback, useEffect } from 'react';
 // Get API base URL from window or default to localhost for development
 const API_BASE = window.__API_BASE__ || 'http://localhost:3000';
 
-// ---- TTS Manager ----
-let ttsPrimed = false;
-
-function pickSpanishVoice() {
-  const voices = window.speechSynthesis?.getVoices?.() || [];
-  const prefs = ["es-MX","es-US","es-419","es-AR","es-CL","es-CO","es-PE","es-VE","es-UY","es-EC","es-CR","es-PA","es-PR","es-DO","es-HN","es-NI","es-SV","es-GT"];
-  for (const tag of prefs) {
-    const v = voices.find(v => v.lang?.toLowerCase() === tag.toLowerCase());
-    if (v) return v;
+// ---- TTS Queue Manager ----
+class TTSQueue {
+  constructor() {
+    this.queue = [];
+    this.currentAudio = null;
+    this.currentMessageId = null;
+    this.isPlaying = false;
   }
-  return voices.find(v => v.lang?.toLowerCase().startsWith("es"));
-}
 
-async function primeTTSGesture() {
-  // Call this on first user gesture (press mic). Helps iOS/ChromeOS.
-  try {
-    if (ttsPrimed) return;
-    const dummy = new SpeechSynthesisUtterance(" ");
-    dummy.volume = 0; // silent priming blip
-    window.speechSynthesis?.speak(dummy);
-    ttsPrimed = true;
-  } catch {}
-}
-
-function speakBrowserSpanish(text) {
-  // Small delay protects against immediate cancel/race on first utterance in some Chromes
-  return new Promise((resolve) => {
-    setTimeout(() => {
-      const u = new SpeechSynthesisUtterance(text);
-      const v = pickSpanishVoice();
-      if (v) u.voice = v;
-      u.rate = 0.95; u.pitch = 1.0;
-      u.onend = resolve;
-      u.onerror = resolve;
-      try { 
-        window.speechSynthesis?.speak(u); 
-      } catch { 
-        resolve(); 
-      }
-    }, 60);
-  });
-}
-
-async function speakServerTTS(text, apiBase) {
-  try {
-    const r = await fetch(`${apiBase}/tts`, {
+  async playServerTTS(text, apiBase) {
+    const response = await fetch(`${apiBase}/tts`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text })
     });
-    if (!r.ok) return;
-    const blob = await r.blob();
+    if (!response.ok) throw new Error('TTS request failed');
+    const blob = await response.blob();
     const url = URL.createObjectURL(blob);
     const audio = new Audio(url);
-    audio.onended = () => URL.revokeObjectURL(url);
-    await audio.play();
-  } catch (e) {
-    console.error('Server TTS error:', e);
+    
+    return new Promise((resolve, reject) => {
+      audio.onended = () => {
+        URL.revokeObjectURL(url);
+        resolve();
+      };
+      audio.onerror = () => {
+        URL.revokeObjectURL(url);
+        reject(new Error('Audio playback failed'));
+      };
+      this.currentAudio = audio;
+      audio.play().catch(reject);
+    });
+  }
+
+  stop() {
+    console.log('🛑 Stopping current audio');
+    if (this.currentAudio) {
+      this.currentAudio.pause();
+      this.currentAudio.currentTime = 0;
+      this.currentAudio = null;
+    }
+    this.currentMessageId = null;
+    this.isPlaying = false;
+  }
+
+  clearQueue() {
+    this.queue = [];
+  }
+
+  async processQueue(apiBase) {
+    while (this.queue.length > 0) {
+      const { text, messageId, resolve, reject } = this.queue.shift();
+      this.currentMessageId = messageId;
+      this.isPlaying = true;
+      
+      try {
+        console.log('🔊 Playing:', text.substring(0, 50));
+        await this.playServerTTS(text, apiBase);
+        resolve();
+      } catch (err) {
+        console.error('TTS error:', err);
+        reject(err);
+      }
+      
+      this.currentMessageId = null;
+      this.isPlaying = false;
+      await new Promise(resolve => setTimeout(resolve, 100)); // Small pause between items
+    }
+  }
+
+  speak(text, messageId, apiBase) {
+    return new Promise((resolve, reject) => {
+      // If same message is already playing, stop it
+      if (this.currentMessageId === messageId && this.isPlaying) {
+        console.log('🛑 Same message playing - stopping');
+        this.stop();
+        this.clearQueue();
+        resolve();
+        return;
+      }
+
+      // If different message playing, add to queue
+      if (this.isPlaying) {
+        console.log('📋 Adding to queue:', text.substring(0, 30));
+        this.queue.push({ text, messageId, resolve, reject });
+        return;
+      }
+
+      // Start playing immediately
+      this.queue.push({ text, messageId, resolve, reject });
+      this.processQueue(apiBase);
+    });
   }
 }
+
+const ttsQueue = new TTSQueue();
 
 // Detect iOS for better defaults
 const isiOS = typeof navigator !== 'undefined' && /iP(hone|ad|od)/.test(navigator.userAgent);
@@ -172,7 +208,6 @@ function App() {
 
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [useServerTTS, setUseServerTTS] = useState(isiOS); // Default ON for iOS
   const [showEnglish, setShowEnglish] = useState(false);
   const [error, setError] = useState('');
   const [showInstallPrompt, setShowInstallPrompt] = useState(false);
@@ -383,9 +418,6 @@ function App() {
     
     try {
       setError('');
-      
-      // Prime TTS on first user interaction
-      await primeTTSGesture();
 
       // Request a fresh stream for this recording session with mobile-compatible constraints
       const constraints = {
@@ -757,32 +789,22 @@ function App() {
         return newMessages;
       });
 
-      // Auto-speak parts of the AI response (correction first if exists, then reply)
-      // Note: Mobile Safari blocks autoplay, so this only works on desktop or after user interaction
+      // Auto-play AI response using queue system
       const allParts = [
         data.correction_es,  // Correction first if exists
         data.reply_es        // Main reply (always present)
       ].filter(Boolean);
       
       if (allParts.length > 0) {
-        // Add a small delay to ensure the UI updates first, then speak each part
-        // Auto-TTS works on mobile because we're within the user interaction context (button press)
+        // Small delay to ensure UI updates first
         setTimeout(async () => {
           try {
-            console.log('🔊 Auto-playing TTS response...');
-            
+            console.log('🔊 Auto-playing AI response');
             for (const part of allParts) {
-              console.log('Speaking part:', part.substring(0, 50) + '...');
-              if (useServerTTS) {
-                await speakServerTTS(part, API_BASE);
-              } else {
-                await speakBrowserSpanish(part);
-              }
-              // Small pause between parts
-              await new Promise(resolve => setTimeout(resolve, 500));
+              await ttsQueue.speak(part, `auto-${Date.now()}`, API_BASE);
             }
           } catch (e) {
-            console.log('Auto-TTS failed (user can still tap bubbles):', e);
+            console.log('Auto-play failed (user can tap bubbles):', e);
           }
         }, 300);
       }
@@ -798,7 +820,7 @@ function App() {
       setIsProcessing(false);
       abortControllerRef.current = null; // Clear the abort controller
     }
-  }, [messages, useServerTTS, showEnglish]);
+  }, [messages, showEnglish]);
 
   // Translation function
   const translateText = useCallback(async (text) => {
@@ -829,45 +851,31 @@ function App() {
     return null;
   }, []);
 
-  // Speak function for tap-to-read sections with instant translation display
+  // New queue-based speak function - handles tap-to-replay with queue management
   const speak = useCallback(async (text, messageId) => {
-    console.log('🔊 Speaking:', { text, messageId, hasTranslation: translations.has(messageId) });
+    console.log('🔊 Speak requested:', { text: text.substring(0, 30), messageId });
     
-    // Mark this bubble as clicked to reveal translation
+    // Mark bubble as clicked to reveal translation
     if (messageId) {
       setClickedBubbles(prev => new Set(prev.add(messageId)));
     }
     
-    // Play the TTS
-    if (useServerTTS) {
-      await speakServerTTS(text, API_BASE);
-    } else {
-      await speakBrowserSpanish(text);
+    // Play through queue (handles stopping same message or queueing different ones)
+    try {
+      await ttsQueue.speak(text, messageId, API_BASE);
+    } catch (err) {
+      console.error('TTS playback error:', err);
     }
     
-    // Translation should already be cached from chat response
-    // If somehow not cached (shouldn't happen), get it as fallback
+    // Fetch translation if not cached (fallback)
     if (messageId && !translations.has(messageId)) {
-      console.log('⚠️ Translation not pre-cached for messageId:', messageId, '- fetching as fallback');
+      console.log('⚠️ Translation not cached - fetching');
       const translation = await translateText(text);
       if (translation) {
-        console.log('✅ Fallback translation received:', { messageId, translation });
         setTranslations(prev => new Map(prev.set(messageId, translation)));
       }
-    } else if (messageId) {
-      console.log('⚡ Using pre-cached translation for:', messageId);
     }
-  }, [useServerTTS, translations, translateText]);
-
-  // Load voices on component mount (needed for some browsers)
-  useEffect(() => {
-    if ('speechSynthesis' in window) {
-      const loadVoices = () => window.speechSynthesis.getVoices();
-      loadVoices();
-      window.speechSynthesis.addEventListener('voiceschanged', loadVoices);
-      return () => window.speechSynthesis.removeEventListener('voiceschanged', loadVoices);
-    }
-  }, []);
+  }, [translations, translateText]);
 
   const clearConversation = useCallback(() => {
     setMessages([]);
@@ -903,15 +911,6 @@ function App() {
                 📱 Install App
               </button>
             )}
-            <label className="flex items-center gap-2 text-xs text-gray-600 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={useServerTTS}
-                onChange={(e) => setUseServerTTS(e.target.checked)}
-                className="h-3 w-3 rounded"
-              />
-              <span>Server TTS</span>
-            </label>
             <label className="flex items-center gap-2 text-xs text-gray-600 cursor-pointer">
               <input
                 type="checkbox"
