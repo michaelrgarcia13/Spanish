@@ -440,36 +440,33 @@ function App() {
       streamRef.current = stream;
       audioChunksRef.current = [];
 
-      // Try MIME types in order of OpenAI Whisper compatibility
-      const mimeTypesToTry = [
-        'audio/wav',           // Most compatible
-        'audio/mp4',           // Very compatible
-        'audio/webm',          // Compatible but less reliable
-        'audio/ogg',           // Fallback
-        'audio/webm;codecs=opus' // Last resort
-      ];
-      
-      console.log('MediaRecorder MIME type support check:');
-      mimeTypesToTry.forEach(type => {
-        console.log(`  ${type}: ${MediaRecorder.isTypeSupported(type) ? '✅ Supported' : '❌ Not supported'}`);
-      });
-      
+      // Force MP4 for iOS (best compatibility with OpenAI Whisper)
+      // For other platforms, try compatible formats
       let mimeType = '';
-      for (const type of mimeTypesToTry) {
-        if (MediaRecorder.isTypeSupported(type)) {
-          mimeType = type;
-          break;
+      if (isiOS) {
+        // iOS Safari only supports MP4
+        mimeType = 'audio/mp4';
+        console.log('iOS detected - using audio/mp4');
+      } else {
+        // Try formats in order of Whisper compatibility
+        const mimeTypesToTry = [
+          'audio/mp4',
+          'audio/webm;codecs=opus',
+          'audio/webm',
+          'audio/ogg'
+        ];
+        
+        for (const type of mimeTypesToTry) {
+          if (MediaRecorder.isTypeSupported(type)) {
+            mimeType = type;
+            console.log('Selected MIME type:', mimeType);
+            break;
+          }
         }
       }
       
-      // If no specific type supported, let browser choose
-      if (!mimeType) {
-        mimeType = ''; 
-        console.log('No preferred MIME type supported, using browser default');
-      } else {
-        console.log('Selected MIME type:', mimeType);
-      }
       const mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : {});
+      console.log('MediaRecorder created with mimeType:', mediaRecorder.mimeType);
 
       mediaRecorder.ondataavailable = (event) => {
         console.log('Data available:', event.data.size, 'bytes');
@@ -604,8 +601,7 @@ function App() {
     
     console.log('Processing audio blob:', {
       size: audioBlob.size,
-      type: audioBlob.type,
-      lastModified: audioBlob.lastModified || 'N/A'
+      type: audioBlob.type
     });
     
     // Create abort controller for this request
@@ -615,7 +611,19 @@ function App() {
     try {
       // Send to speech-to-text
       const formData = new FormData();
-      formData.append('audio', audioBlob, 'audio.webm');
+      
+      // Determine filename based on MIME type for OpenAI compatibility
+      let filename = 'audio.mp4'; // Default for iOS
+      if (audioBlob.type.includes('webm')) {
+        filename = 'audio.webm';
+      } else if (audioBlob.type.includes('ogg')) {
+        filename = 'audio.ogg';
+      } else if (audioBlob.type.includes('wav')) {
+        filename = 'audio.wav';
+      }
+      
+      formData.append('audio', audioBlob, filename);
+      console.log('Sending audio as:', filename, 'type:', audioBlob.type);
 
       console.log('Sending STT request to:', `${API_BASE}/stt`);
       const sttResponse = await fetch(`${API_BASE}/stt`, {
@@ -789,24 +797,24 @@ function App() {
         return newMessages;
       });
 
-      // Auto-play AI response using queue system
+      // Auto-play AI response immediately (must stay in user gesture context for iOS)
       const allParts = [
-        data.correction_es,  // Correction first if exists
-        data.reply_es        // Main reply (always present)
+        data.correction_es,
+        data.reply_es
       ].filter(Boolean);
       
       if (allParts.length > 0) {
-        // Small delay to ensure UI updates first
-        setTimeout(async () => {
+        console.log('🔊 Auto-playing AI response');
+        // Play immediately - no setTimeout to maintain gesture context
+        (async () => {
           try {
-            console.log('🔊 Auto-playing AI response');
             for (const part of allParts) {
               await ttsQueue.speak(part, `auto-${Date.now()}`, API_BASE);
             }
           } catch (e) {
-            console.log('Auto-play failed (user can tap bubbles):', e);
+            console.error('Auto-play error:', e);
           }
-        }, 300);
+        })();
       }
 
     } catch (err) {
