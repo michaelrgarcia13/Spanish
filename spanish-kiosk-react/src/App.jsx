@@ -10,9 +10,11 @@ class TTSQueue {
     this.currentAudio = null;
     this.currentMessageId = null;
     this.isPlaying = false;
+    this.isProcessingQueue = false;
   }
 
   async playServerTTS(text, apiBase) {
+    console.log('🎵 Fetching TTS for:', text.substring(0, 40));
     const response = await fetch(`${apiBase}/tts`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -25,75 +27,107 @@ class TTSQueue {
     
     return new Promise((resolve, reject) => {
       audio.onended = () => {
+        console.log('✅ Audio finished playing');
         URL.revokeObjectURL(url);
+        this.currentAudio = null;
         resolve();
       };
-      audio.onerror = () => {
+      audio.onerror = (e) => {
+        console.error('❌ Audio error:', e);
         URL.revokeObjectURL(url);
+        this.currentAudio = null;
         reject(new Error('Audio playback failed'));
       };
+      
       this.currentAudio = audio;
-      audio.play().catch(reject);
+      console.log('▶️ Starting playback');
+      audio.play().catch((err) => {
+        console.error('❌ Play failed:', err);
+        reject(err);
+      });
     });
   }
 
-  stop() {
+  stopCurrent() {
     console.log('🛑 Stopping current audio');
     if (this.currentAudio) {
-      this.currentAudio.pause();
-      this.currentAudio.currentTime = 0;
-      this.currentAudio = null;
+      try {
+        this.currentAudio.pause();
+        this.currentAudio.currentTime = 0;
+        this.currentAudio = null;
+      } catch (e) {
+        console.error('Error stopping audio:', e);
+      }
     }
     this.currentMessageId = null;
     this.isPlaying = false;
   }
 
   clearQueue() {
+    console.log('🗑️ Clearing queue');
     this.queue = [];
   }
 
   async processQueue(apiBase) {
+    if (this.isProcessingQueue) {
+      console.log('⏸️ Queue already being processed');
+      return;
+    }
+    
+    this.isProcessingQueue = true;
+    console.log('🔄 Starting queue processing');
+    
     while (this.queue.length > 0) {
       const { text, messageId, resolve, reject } = this.queue.shift();
       this.currentMessageId = messageId;
       this.isPlaying = true;
       
+      console.log('🔊 Playing message:', messageId, 'Queue remaining:', this.queue.length);
+      
       try {
-        console.log('🔊 Playing:', text.substring(0, 50));
         await this.playServerTTS(text, apiBase);
+        this.isPlaying = false;
+        this.currentMessageId = null;
         resolve();
       } catch (err) {
-        console.error('TTS error:', err);
+        console.error('❌ TTS error:', err);
+        this.isPlaying = false;
+        this.currentMessageId = null;
         reject(err);
       }
       
-      this.currentMessageId = null;
-      this.isPlaying = false;
-      await new Promise(resolve => setTimeout(resolve, 100)); // Small pause between items
+      // Small pause between messages
+      if (this.queue.length > 0) {
+        await new Promise(resolve => setTimeout(resolve, 200));
+      }
     }
+    
+    this.isProcessingQueue = false;
+    console.log('✅ Queue processing complete');
   }
 
   speak(text, messageId, apiBase) {
     return new Promise((resolve, reject) => {
-      // If same message is already playing, stop it
+      console.log('🎤 Speak called:', { messageId, isPlaying: this.isPlaying, currentMessageId: this.currentMessageId });
+      
+      // If same message is currently playing, stop it and clear queue
       if (this.currentMessageId === messageId && this.isPlaying) {
-        console.log('🛑 Same message playing - stopping');
-        this.stop();
+        console.log('🛑 Same message playing - stopping everything');
+        this.stopCurrent();
         this.clearQueue();
+        this.isProcessingQueue = false;
         resolve();
         return;
       }
 
-      // If different message playing, add to queue
-      if (this.isPlaying) {
-        console.log('📋 Adding to queue:', text.substring(0, 30));
-        this.queue.push({ text, messageId, resolve, reject });
-        return;
-      }
-
-      // Start playing immediately
+      // Add to queue
+      console.log('➕ Adding to queue');
       this.queue.push({ text, messageId, resolve, reject });
-      this.processQueue(apiBase);
+      
+      // Start processing if not already processing
+      if (!this.isProcessingQueue) {
+        this.processQueue(apiBase);
+      }
     });
   }
 }
@@ -743,10 +777,13 @@ function App() {
         needs_correction: !!data.needs_correction
       };
 
+      // Calculate assistant index for message IDs
+      let assistantIndex = messages.length + 1; // +1 because we added user message
+      
       // Pre-cache translations for instant display when bubbles are clicked
       setMessages(prev => {
         const newMessages = [...prev, assistantMessage];
-        const assistantIndex = newMessages.length - 1;
+        assistantIndex = newMessages.length - 1; // Update with actual index
         const userIndex = assistantIndex - 1;
         
         // Pre-translate and cache user message
@@ -797,24 +834,30 @@ function App() {
         return newMessages;
       });
 
-      // Auto-play AI response immediately (must stay in user gesture context for iOS)
-      const allParts = [
-        data.correction_es,
-        data.reply_es
-      ].filter(Boolean);
+      // Auto-play AI response with proper message IDs (stays in gesture context)
+      // Build parts with their message IDs for proper queue management
+      const partsToPlay = [];
+      if (data.correction_es) {
+        partsToPlay.push({ 
+          text: data.correction_es, 
+          messageId: `assistant-${assistantIndex}-correction` 
+        });
+      }
+      if (data.reply_es) {
+        partsToPlay.push({ 
+          text: data.reply_es, 
+          messageId: `assistant-${assistantIndex}-reply` 
+        });
+      }
       
-      if (allParts.length > 0) {
-        console.log('🔊 Auto-playing AI response');
-        // Play immediately - no setTimeout to maintain gesture context
-        (async () => {
-          try {
-            for (const part of allParts) {
-              await ttsQueue.speak(part, `auto-${Date.now()}`, API_BASE);
-            }
-          } catch (e) {
-            console.error('Auto-play error:', e);
-          }
-        })();
+      if (partsToPlay.length > 0) {
+        console.log('🔊 Auto-playing AI response with IDs:', partsToPlay.map(p => p.messageId));
+        // Queue all parts immediately to maintain gesture context
+        partsToPlay.forEach(({ text, messageId }) => {
+          ttsQueue.speak(text, messageId, API_BASE).catch(e => {
+            console.error('Auto-play error for', messageId, ':', e);
+          });
+        });
       }
 
     } catch (err) {
