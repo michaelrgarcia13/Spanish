@@ -505,106 +505,64 @@ function App() {
     }
   }, [isRecording, isProcessing, micPermissionGranted, isRequestingPermission]);
 
+  // Simple, direct button press handler - no complex dependencies
   const handleButtonPress = useCallback((e) => {
-    console.log('🎯 handleButtonPress called');
-    isButtonPressedRef.current = true;
+    e?.preventDefault();
+    e?.stopPropagation();
     
-    // Prevent default behavior and stop event propagation
-    if (e) {
-      e.preventDefault();
-      e.stopPropagation();
+    console.log('🎯 Button pressed - Permission:', micPermissionGrantedRef.current);
+    
+    // Don't do anything if already busy
+    if (isProcessing || isRequestingPermission || isRecording) {
+      console.log('🎯 Busy - ignoring press');
+      return;
     }
 
-    console.log('🎯 Current state:', {
-      micPermissionGranted: micPermissionGrantedRef.current,
-      isRecording,
-      isProcessing,
-      isRequestingPermission
-    });
-
-    // If permission not granted, request it ONLY - DO NOT START RECORDING
+    // If no permission, request it and EXIT (don't record)
     if (!micPermissionGrantedRef.current) {
-      console.log('🎯 No permission - requesting permission ONLY (user must press again to record)');
+      console.log('🎯 Requesting permission...');
       requestMicPermissionOnce();
-      return; // Exit - user must release and press again to record
-    }
-
-    // If already processing or requesting, ignore
-    if (isProcessing || isRequestingPermission) {
-      console.log('🎯 Already busy, ignoring button press');
       return;
     }
 
-    // Permission granted - start recording IMMEDIATELY
-    console.log('🎯 Permission exists, starting recording NOW');
+    // Have permission - start recording immediately
+    console.log('🎯 Starting recording NOW');
     startRecording(e);
-  }, [isRecording, isProcessing, isRequestingPermission, requestMicPermissionOnce, startRecording]);
+  }, [isProcessing, isRequestingPermission, isRecording, requestMicPermissionOnce, startRecording]);
 
+  // Simple, direct stop handler
   const stopRecording = useCallback((e) => {
-    // Prevent default behavior and stop event propagation
-    if (e) {
-      e.preventDefault();
-      e.stopPropagation();
-    }
+    e?.preventDefault();
+    e?.stopPropagation();
 
-    console.log('🛑 stopRecording called');
-    isButtonPressedRef.current = false;
+    console.log('🛑 Button released');
     
-    // If we're requesting permission, just mark button released
+    // Don't stop if we're requesting permission
     if (isRequestingPermission) {
-      console.log('🛑 Requesting permission, just clearing button state');
+      console.log('🛑 Requesting permission - ignoring release');
       return;
     }
     
+    // Don't stop if not recording
     if (!isRecording) {
-      console.log('🛑 Not recording, ignoring stop request');
+      console.log('🛑 Not recording - ignoring release');
       return;
     }
 
-    // Check minimum recording duration (300ms minimum to avoid "too short" errors)
-    const recordingDuration = Date.now() - (recordingStartTimeRef.current || 0);
-    console.log('🛑 Recording duration:', recordingDuration + 'ms');
-    
-    if (recordingDuration < 300) {
-      console.log('🛑 Recording too short (' + recordingDuration + 'ms), will wait before processing...');
-      // Don't return - let it stop but mark it for delayed processing
-    }
-    
+    console.log('🛑 Stopping recording NOW');
     setIsRecording(false);
     
-    // Stop the media recorder if it's recording
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
-      console.log('🛑 Stopping MediaRecorder');
+    // Stop MediaRecorder
+    if (mediaRecorderRef.current?.state === 'recording') {
       mediaRecorderRef.current.stop();
-    } else {
-      console.log('🛑 MediaRecorder not in recording state:', mediaRecorderRef.current?.state);
     }
     
-    // AGGRESSIVE CLEANUP: Stop all tracks immediately
+    // Force stop all tracks immediately
     if (streamRef.current) {
-      console.log('🛑 Force stopping all stream tracks');
       streamRef.current.getTracks().forEach(track => {
-        try {
-          track.stop();
-          console.log('🛑 Stopped track:', track.id, track.readyState);
-        } catch (err) {
-          console.error('🛑 Error stopping track:', err);
-        }
+        track.stop();
+        console.log('🛑 Track stopped:', track.id);
       });
-      streamRef.current = null;
-    }
-    
-    // Force stop MediaRecorder if still active (backup cleanup)
-    if (mediaRecorderRef.current) {
-      try {
-        if (mediaRecorderRef.current.state !== 'inactive') {
-          console.log('🛑 Force stopping MediaRecorder (backup)');
-          mediaRecorderRef.current.stop();
-        }
-        mediaRecorderRef.current = null;
-      } catch (err) {
-        console.error('🛑 Error stopping MediaRecorder:', err);
-      }
     }
   }, [isRecording, isRequestingPermission]);
 
