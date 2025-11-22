@@ -392,20 +392,26 @@ function App() {
       
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
       
-      // Stop the test stream immediately and thoroughly clean up
-      stream.getTracks().forEach(track => {
-        track.stop();
-        console.log('Stopped test microphone track:', track.id);
-      });
-      
-      // Add a small delay to ensure cleanup on iOS
-      await new Promise(resolve => setTimeout(resolve, 100));
+      // Store the stream temporarily to keep permission active
+      // iOS can revoke permission if we immediately stop all tracks
+      streamRef.current = stream;
       
       // Store permission in localStorage
       localStorage.setItem('micPermissionGranted', 'true');
       setMicPermissionGranted(true);
       micPermissionGrantedRef.current = true;
-      console.log('Microphone permission granted and stored');
+      console.log('✅ Microphone permission granted and stored');
+      
+      // Clean up the test stream after a short delay
+      setTimeout(() => {
+        if (streamRef.current === stream) {
+          stream.getTracks().forEach(track => {
+            track.stop();
+            console.log('Stopped test microphone track:', track.id);
+          });
+          streamRef.current = null;
+        }
+      }, 500);
       
     } catch (err) {
       console.error('Microphone permission denied:', err);
@@ -777,14 +783,16 @@ function App() {
         needs_correction: !!data.needs_correction
       };
 
-      // Calculate assistant index for message IDs
-      let assistantIndex = messages.length + 1; // +1 because we added user message
+      // Calculate assistant index for message IDs BEFORE setMessages
+      // messages.length already includes the user message we added earlier
+      const assistantIndex = messages.length + 1;
+      console.log('📍 Assistant index for auto-play:', assistantIndex);
       
       // Pre-cache translations for instant display when bubbles are clicked
       setMessages(prev => {
         const newMessages = [...prev, assistantMessage];
-        assistantIndex = newMessages.length - 1; // Update with actual index
-        const userIndex = assistantIndex - 1;
+        const actualIndex = newMessages.length - 1;
+        const userIndex = actualIndex - 1;
         
         // Pre-translate and cache user message
         if (userIndex >= 0 && newMessages[userIndex].role === 'user') {
@@ -810,14 +818,14 @@ function App() {
             const correctionLine = data.translation_en.split('correction:')[1]?.split('\n')[0]?.trim();
             if (correctionLine) {
               const correctionTranslation = extractFromBrackets(correctionLine);
-              newTranslations.set(`assistant-${assistantIndex}-correction`, correctionTranslation);
+              newTranslations.set(`assistant-${actualIndex}-correction`, correctionTranslation);
             }
           }
           if (data.reply_es && data.translation_en.includes('reply:')) {
             const replyLine = data.translation_en.split('reply:')[1]?.trim();
             if (replyLine) {
               const replyTranslation = extractFromBrackets(replyLine);
-              newTranslations.set(`assistant-${assistantIndex}-reply`, replyTranslation);
+              newTranslations.set(`assistant-${actualIndex}-reply`, replyTranslation);
             }
           }
           
