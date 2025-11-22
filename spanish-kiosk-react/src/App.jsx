@@ -255,6 +255,7 @@ function App() {
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
   const streamRef = useRef(null);
+  const permissionTestStreamRef = useRef(null); // Separate ref for permission test stream
   const messagesEndRef = useRef(null);
   const abortControllerRef = useRef(null); // For canceling requests
   const recordingStartTimeRef = useRef(null); // Track recording duration
@@ -392,9 +393,8 @@ function App() {
       
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
       
-      // Store the stream temporarily to keep permission active
-      // iOS can revoke permission if we immediately stop all tracks
-      streamRef.current = stream;
+      // Store in SEPARATE ref to avoid conflicts with recording stream
+      permissionTestStreamRef.current = stream;
       
       // Store permission in localStorage
       localStorage.setItem('micPermissionGranted', 'true');
@@ -402,16 +402,16 @@ function App() {
       micPermissionGrantedRef.current = true;
       console.log('✅ Microphone permission granted and stored');
       
-      // Clean up the test stream after a short delay
+      // Clean up test stream after delay - safe because it's in separate ref
       setTimeout(() => {
-        if (streamRef.current === stream) {
-          stream.getTracks().forEach(track => {
+        if (permissionTestStreamRef.current) {
+          permissionTestStreamRef.current.getTracks().forEach(track => {
             track.stop();
-            console.log('Stopped test microphone track:', track.id);
+            console.log('Stopped permission test track:', track.id);
           });
-          streamRef.current = null;
+          permissionTestStreamRef.current = null;
         }
-      }, 500);
+      }, 1000);
       
     } catch (err) {
       console.error('Microphone permission denied:', err);
@@ -618,7 +618,23 @@ function App() {
       return;
     }
 
-    console.log('🛑 Stopping recording NOW');
+    // Check minimum recording duration (800ms minimum for valid audio)
+    const recordingDuration = Date.now() - (recordingStartTimeRef.current || 0);
+    if (recordingDuration < 800) {
+      console.log('⚠️ Recording too short:', recordingDuration + 'ms - ignoring');
+      setIsRecording(false);
+      // Stop and clean up
+      if (mediaRecorderRef.current?.state === 'recording') {
+        mediaRecorderRef.current.stop();
+      }
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop());
+        streamRef.current = null;
+      }
+      return;
+    }
+
+    console.log('🛑 Stopping recording NOW (duration:', recordingDuration + 'ms)');
     setIsRecording(false);
     
     // Stop MediaRecorder
@@ -775,24 +791,25 @@ function App() {
       const data = await chatResponse.json();
       
       // Add structured assistant response with new simplified format
+      // Filter out string "null" values from OpenAI
       const assistantMessage = {
         role: 'assistant',
-        correction_es: data.correction_es, // Only if correction needed
-        reply_es: data.reply_es || '',      // Main response (always present)
+        correction_es: (data.correction_es && data.correction_es !== 'null') ? data.correction_es : null,
+        reply_es: data.reply_es || '',
         translation_en: data.translation_en,
         needs_correction: !!data.needs_correction
       };
 
-      // Calculate assistant index for message IDs BEFORE setMessages
-      // messages.length already includes the user message we added earlier
-      const assistantIndex = messages.length + 1;
-      console.log('📍 Assistant index for auto-play:', assistantIndex);
+      // Will calculate correct index inside setMessages callback
+      let actualAssistantIndex = -1;
       
       // Pre-cache translations for instant display when bubbles are clicked
       setMessages(prev => {
         const newMessages = [...prev, assistantMessage];
         const actualIndex = newMessages.length - 1;
+        actualAssistantIndex = actualIndex; // Capture for auto-play
         const userIndex = actualIndex - 1;
+        console.log('📍 Assistant message added at index:', actualIndex);
         
         // Pre-translate and cache user message
         if (userIndex >= 0 && newMessages[userIndex].role === 'user') {
@@ -845,21 +862,23 @@ function App() {
       // Auto-play AI response with proper message IDs (stays in gesture context)
       // Build parts with their message IDs for proper queue management
       const partsToPlay = [];
-      if (data.correction_es) {
+      // Only add correction if it exists AND is not the string "null"
+      if (data.correction_es && data.correction_es !== 'null') {
         partsToPlay.push({ 
           text: data.correction_es, 
-          messageId: `assistant-${assistantIndex}-correction` 
+          messageId: `assistant-${actualAssistantIndex}-correction` 
         });
       }
       if (data.reply_es) {
         partsToPlay.push({ 
           text: data.reply_es, 
-          messageId: `assistant-${assistantIndex}-reply` 
+          messageId: `assistant-${actualAssistantIndex}-reply` 
         });
       }
       
       if (partsToPlay.length > 0) {
         console.log('🔊 Auto-playing AI response with IDs:', partsToPlay.map(p => p.messageId));
+        console.log('🔊 Using assistant index:', actualAssistantIndex);
         // Queue all parts immediately to maintain gesture context
         partsToPlay.forEach(({ text, messageId }) => {
           ttsQueue.speak(text, messageId, API_BASE).catch(e => {
@@ -1018,8 +1037,8 @@ function App() {
 
               return (
                 <div key={`assistant-${index}`} className="space-y-2">
-                  {/* Show correction first if it exists */}
-                  {message.correction_es && (
+                  {/* Show correction first if it exists and is not string "null" */}
+                  {message.correction_es && message.correction_es !== 'null' && (
                     <MessageBubble 
                       text={message.correction_es} 
                       isUser={false}
