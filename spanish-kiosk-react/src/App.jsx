@@ -22,14 +22,28 @@ class TTSManager {
     document.body.appendChild(this.audio);
   }
 
+  // Check if audio is currently playing
+  isPlaying() {
+    return !!this.audio && !this.audio.paused && !this.audio.ended;
+  }
+
   // Call during user gesture to unlock autoplay
   async prime() {
     this.ensureAudioEl();
-    if (this.primed) {
-      console.log('✅ Audio already primed');
+    
+    // Already primed or currently priming
+    if (this.primed || this._priming) {
+      console.log('✅ Audio already primed or priming in progress');
       return;
     }
-    
+
+    // ✅ Do NOT prime if we're in the middle of playing or processing
+    if (this.isPlaying() || this.processing || (this.queue && this.queue.length > 0)) {
+      console.log('⏭️ Skipping prime - audio already active');
+      return;
+    }
+
+    this._priming = true;
     try {
       console.log('🔓 Priming audio element...');
       // 50ms silent MP3 data URI
@@ -42,6 +56,8 @@ class TTSManager {
     } catch (e) {
       console.warn('⚠️ Audio priming failed:', e.message);
       this.primed = false;
+    } finally {
+      this._priming = false;
     }
   }
 
@@ -180,7 +196,7 @@ function MessageBubble({ text, isUser, label, onSpeak, messageId, translation, h
           </div>
         )}
         <div
-          onClick={() => onSpeak(text, messageId)}
+          onClick={(e) => onSpeak(text, messageId, e)}
           title="Click anywhere on this bubble to hear it spoken aloud and see English translation"
           style={{
             ...bubbleStyle,
@@ -947,7 +963,13 @@ function App() {
   }, []);
 
   // Speak function for bubble taps - uses primed audio element
-  const speak = useCallback(async (text, messageId) => {
+  const speak = useCallback(async (text, messageId, event) => {
+    // Prevent event bubbling to avoid conflicts
+    if (event) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+    
     console.log('🔊 Speak requested:', { text: text.substring(0, 30), messageId });
     
     // Mark bubble as clicked to reveal translation
@@ -960,6 +982,9 @@ function App() {
       console.log('🛑 Stopped currently playing message');
       return;
     }
+    
+    // Prime under this gesture if needed (safe - won't interrupt active playback)
+    await ttsManager.prime();
     
     // Fetch TTS and enqueue
     try {
@@ -1135,6 +1160,8 @@ function App() {
         <div className="max-w-4xl mx-auto text-center">
           <button
             onPointerDown={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
               console.log('👆 PointerDown event fired');
               if (!isProcessing && !isRequestingPermission) {
                 console.log('👆 PointerDown conditions met, calling handleButtonPress');
@@ -1144,12 +1171,22 @@ function App() {
               }
             }}
             onPointerUp={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
               console.log('👆 PointerUp event fired');
               if (!isRequestingPermission) {
                 console.log('👆 PointerUp calling stopRecording');
                 stopRecording(e);
               } else {
                 console.log('👆 PointerUp blocked:', { isRequestingPermission });
+              }
+            }}
+            onPointerCancel={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              console.log('👆 PointerCancel event fired');
+              if (!isRequestingPermission) {
+                stopRecording(e);
               }
             }}
             onClick={(e) => {
