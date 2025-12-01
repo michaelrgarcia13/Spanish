@@ -968,29 +968,22 @@ function App() {
         console.log('🔊 Auto-playing AI response with IDs:', partsToPlay.map(p => p.messageId));
         console.log('🔊 Using assistant index:', actualAssistantIndex);
         
-        // Fetch and enqueue each part (with caching)
+        // Fetch and cache new TTS (never check cache for new AI responses)
         for (const { text, messageId } of partsToPlay) {
           try {
-            // Check cache first
-            const cached = ttsCache.get(messageId);
-            if (cached) {
-              console.log('🎵 Auto-play using cached TTS:', messageId);
-              ttsManager.enqueueBlob(messageId, cached.blob, true);
+            // Always fetch fresh TTS for new AI messages
+            const response = await fetch(`${API_BASE}/tts`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ text })
+            });
+            
+            if (response.ok) {
+              const blob = await response.blob();
+              ttsCache.set(messageId, blob); // ✅ Cache for future bubble taps
+              ttsManager.enqueueBlob(messageId, blob);
             } else {
-              // Fetch and cache
-              const response = await fetch(`${API_BASE}/tts`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ text })
-              });
-              
-              if (response.ok) {
-                const blob = await response.blob();
-                ttsCache.set(messageId, blob); // ✅ Cache for future use
-                ttsManager.enqueueBlob(messageId, blob);
-              } else {
-                console.error('TTS fetch failed for', messageId, ':', response.status);
-              }
+              console.error('TTS fetch failed for', messageId, ':', response.status);
             }
           } catch (e) {
             console.error('Auto-play fetch error for', messageId, ':', e);
