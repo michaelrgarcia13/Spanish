@@ -322,11 +322,11 @@ function App() {
   const [isRequestingPermission, setIsRequestingPermission] = useState(false); // New state for permission flow
   const [translations, setTranslations] = useState(new Map()); // Track translations for messages
   const [clickedBubbles, setClickedBubbles] = useState(new Set()); // Track which bubbles have been clicked
+  const [isListening, setIsListening] = useState(false); // Persistent mic listening state
 
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
-  const recordingStreamRef = useRef(null); // ✅ RENAMED: Dedicated ref for recording stream
-  const permissionTestStreamRef = useRef(null); // ✅ Separate ref for permission test stream
+  const persistentStreamRef = useRef(null); // 🎤 Persistent mic stream (stays alive entire session)
   const messagesEndRef = useRef(null);
   const abortControllerRef = useRef(null); // For canceling requests
   const recordingStartTimeRef = useRef(null); // Track recording duration
@@ -410,12 +410,12 @@ function App() {
     // Cleanup on unmount
     return () => {
       console.log('Cleaning up audio resources on unmount');
-      if (recordingStreamRef.current) {
-        recordingStreamRef.current.getTracks().forEach(track => {
+      if (persistentStreamRef.current) {
+        persistentStreamRef.current.getTracks().forEach(track => {
           track.stop();
-          console.log('Cleanup: stopped track', track.id);
+          console.log('Cleanup: stopped persistent stream track', track.id);
         });
-        recordingStreamRef.current = null;
+        persistentStreamRef.current = null;
       }
       if (mediaRecorderRef.current) {
         if (mediaRecorderRef.current.state === 'recording') {
@@ -452,13 +452,55 @@ function App() {
     console.log('Processing cancelled by user');
   }, []);
 
+  // Check if persistent stream is healthy
+  const checkStreamHealth = useCallback(() => {
+    if (!persistentStreamRef.current) return false;
+    const tracks = persistentStreamRef.current.getTracks();
+    const isHealthy = tracks.length > 0 && tracks[0].readyState === 'live';
+    console.log('🔍 Stream health check:', isHealthy, '| Tracks:', tracks.length);
+    return isHealthy;
+  }, []);
+
+  // Recover persistent stream if it dies
+  const recoverPersistentStream = useCallback(async () => {
+    console.log('🔄 Recovering persistent stream...');
+    try {
+      const constraints = {
+        audio: {
+          sampleRate: { ideal: 16000, min: 8000, max: 48000 },
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          ...(isiOS && {
+            sampleSize: 16,
+            volume: 1.0
+          })
+        }
+      };
+      
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      persistentStreamRef.current = stream;
+      setIsListening(true);
+      console.log('✅ Persistent stream recovered');
+      return true;
+    } catch (err) {
+      console.error('❌ Stream recovery failed:', err);
+      setError('Microphone access lost. Please refresh and grant permission again.');
+      setMicPermissionGranted(false);
+      micPermissionGrantedRef.current = false;
+      setIsListening(false);
+      return false;
+    }
+  }, []);
+
   const requestMicPermissionOnce = useCallback(async () => {
     if (permissionRequested || isRequestingPermission) return;
     
     try {
       setIsRequestingPermission(true);
       setPermissionRequested(true);
-      console.log('Requesting microphone permission...');
+      console.log('🎤 Requesting persistent microphone access...');
       
       // Enhanced audio constraints for better mobile compatibility
       const constraints = {
@@ -478,25 +520,16 @@ function App() {
       
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
       
-      // Store in SEPARATE ref to avoid conflicts with recording stream
-      permissionTestStreamRef.current = stream;
+      // Store as PERSISTENT stream (never stopped until session ends)
+      persistentStreamRef.current = stream;
       
       // Store permission in localStorage
       localStorage.setItem('micPermissionGranted', 'true');
       setMicPermissionGranted(true);
       micPermissionGrantedRef.current = true;
-      console.log('✅ Microphone permission granted and stored');
-      
-      // Clean up test stream after longer delay for iOS stability
-      setTimeout(() => {
-        if (permissionTestStreamRef.current) {
-          permissionTestStreamRef.current.getTracks().forEach(track => {
-            track.stop();
-            console.log('Stopped permission test track:', track.id);
-          });
-          permissionTestStreamRef.current = null;
-        }
-      }, 5000); // ✅ Extended to 5s for iOS
+      setIsListening(true); // Show listening indicator
+      console.log('✅ Persistent microphone access granted - stream will stay active');
+      console.log('🎤 Stream tracks:', stream.getTracks().map(t => ({id: t.id, kind: t.kind, readyState: t.readyState})));
       
     } catch (err) {
       console.error('Microphone permission denied:', err);
@@ -521,7 +554,8 @@ function App() {
       isRecording,
       isProcessing,
       isRequestingPermission,
-      micPermissionGranted
+      micPermissionGranted,
+      isListening
     });
 
     // Prevent starting if already recording, processing, or requesting permission
@@ -536,34 +570,27 @@ function App() {
       return;
     }
 
+    // Check if persistent stream is healthy, recover if needed
+    if (!checkStreamHealth()) {
+      console.log('⚠️ Persistent stream unhealthy, attempting recovery...');
+      const recovered = await recoverPersistentStream();
+      if (!recovered) {
+        console.log('❌ Could not recover stream');
+        return;
+      }
+    }
+
     // Set recording state IMMEDIATELY for instant visual feedback
     setIsRecording(true);
 
-    console.log('Starting recording with existing permission...');
+    console.log('🎙️ Starting recording with persistent stream...');
     
     try {
       setError('');
-
-      // Request a fresh stream for this recording session with mobile-compatible constraints
-      const constraints = {
-        audio: {
-          sampleRate: { ideal: 16000, min: 8000, max: 48000 },
-          channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-          // iOS-specific optimizations
-          ...(isiOS && {
-            sampleSize: 16,
-            volume: 1.0
-          })
-        }
-      };
-      
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
-
-      recordingStreamRef.current = stream; // ✅ Use dedicated recording ref
       audioChunksRef.current = [];
+
+      // Use persistent stream for MediaRecorder
+      const stream = persistentStreamRef.current;
 
       // Force MP4 for iOS (best compatibility with OpenAI Whisper)
       // For other platforms, try compatible formats
@@ -611,15 +638,9 @@ function App() {
           const audioBlob = new Blob(audioChunksRef.current, { type: blobType });
           console.log('Audio blob created:', audioBlob.size, 'bytes');
           
-          // Clean up BEFORE processing to prevent interference
-          if (recordingStreamRef.current) {
-            recordingStreamRef.current.getTracks().forEach(track => {
-              track.stop();
-              console.log('Stopped recording track:', track.id, track.readyState);
-            });
-            recordingStreamRef.current = null;
-          }
+          // Clean up MediaRecorder (but keep persistent stream alive)
           mediaRecorderRef.current = null;
+          console.log('🎤 MediaRecorder stopped, persistent stream still listening');
           
           await processAudio(audioBlob);
         } else {
@@ -627,11 +648,7 @@ function App() {
           setIsProcessing(false);
           setError('No audio recorded. Try speaking closer to the microphone.');
           
-          // Clean up even if no data
-          if (recordingStreamRef.current) {
-            recordingStreamRef.current.getTracks().forEach(track => track.stop());
-            recordingStreamRef.current = null;
-          }
+          // Clean up MediaRecorder (but keep persistent stream alive)
           mediaRecorderRef.current = null;
         }
       };
@@ -657,7 +674,7 @@ function App() {
       setIsRecording(false);
       console.error('Recording error:', err);
     }
-  }, [isRecording, isProcessing, micPermissionGranted, isRequestingPermission]);
+  }, [isRecording, isProcessing, micPermissionGranted, isRequestingPermission, isListening, checkStreamHealth, recoverPersistentStream]);
 
   // Simple, direct button press handler - no complex dependencies
   const handleButtonPress = useCallback(async (e) => {
@@ -711,13 +728,9 @@ function App() {
     if (recordingDuration < 800) {
       console.log('⚠️ Recording too short:', recordingDuration + 'ms - ignoring');
       setIsRecording(false);
-      // Stop and clean up
+      // Stop MediaRecorder only
       if (mediaRecorderRef.current?.state === 'recording') {
         mediaRecorderRef.current.stop();
-      }
-      if (recordingStreamRef.current) {
-        recordingStreamRef.current.getTracks().forEach(track => track.stop());
-        recordingStreamRef.current = null;
       }
       return;
     }
@@ -725,17 +738,10 @@ function App() {
     console.log('🛑 Stopping recording NOW (duration:', recordingDuration + 'ms)');
     setIsRecording(false);
     
-    // Stop MediaRecorder
+    // Stop MediaRecorder only (persistent stream keeps listening)
     if (mediaRecorderRef.current?.state === 'recording') {
       mediaRecorderRef.current.stop();
-    }
-    
-    // Force stop all tracks immediately
-    if (recordingStreamRef.current) {
-      recordingStreamRef.current.getTracks().forEach(track => {
-        track.stop();
-        console.log('🛑 Track stopped:', track.id);
-      });
+      console.log('🛑 MediaRecorder stopped, persistent stream still active');
     }
   }, [isRecording, isRequestingPermission]);
 
@@ -1179,6 +1185,25 @@ function App() {
             </h1>
           </div>
           <div className="flex items-center gap-4">
+            {/* Microphone Status Indicator */}
+            {isListening && (
+              <div className="flex items-center gap-2 text-xs" style={{
+                padding: '4px 8px',
+                borderRadius: '12px',
+                backgroundColor: isRecording ? 'rgba(239, 68, 68, 0.1)' : 'rgba(34, 197, 94, 0.1)',
+                border: isRecording ? '1px solid rgba(239, 68, 68, 0.3)' : '1px solid rgba(34, 197, 94, 0.3)',
+                color: isRecording ? '#dc2626' : '#16a34a',
+                fontWeight: '600',
+                animation: isRecording ? 'pulse 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite' : 'none'
+              }}>
+                <span style={{ fontSize: '14px' }}>
+                  {isRecording ? '🔴' : '🎤'}
+                </span>
+                <span>
+                  {isRecording ? 'Recording' : 'Listening'}
+                </span>
+              </div>
+            )}
             {showInstallPrompt && (
               <button
                 onClick={handleInstallClick}
