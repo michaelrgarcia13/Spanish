@@ -3,6 +3,56 @@ import React, { useState, useRef, useCallback, useEffect } from 'react';
 // Get API base URL from window or default to localhost for development
 const API_BASE = window.__API_BASE__ || 'http://localhost:3000';
 
+// ---- TTS Cache with LRU Eviction (10 messages max) ----
+class TTSCache {
+  constructor(maxSize = 10) {
+    this.cache = new Map(); // messageId -> { blob, url }
+    this.maxSize = maxSize;
+  }
+
+  get(messageId) {
+    if (this.cache.has(messageId)) {
+      const entry = this.cache.get(messageId);
+      // Move to end (most recently used)
+      this.cache.delete(messageId);
+      this.cache.set(messageId, entry);
+      console.log('🎵 Cache HIT:', messageId);
+      return entry;
+    }
+    console.log('🎵 Cache MISS:', messageId);
+    return null;
+  }
+
+  set(messageId, blob) {
+    // Evict oldest if at capacity
+    if (this.cache.size >= this.maxSize) {
+      const oldestKey = this.cache.keys().next().value;
+      const oldEntry = this.cache.get(oldestKey);
+      if (oldEntry && oldEntry.url) {
+        console.log('🗑️ Evicting oldest cache entry:', oldestKey);
+        URL.revokeObjectURL(oldEntry.url);
+      }
+      this.cache.delete(oldestKey);
+    }
+    
+    const url = URL.createObjectURL(blob);
+    this.cache.set(messageId, { blob, url });
+    console.log('💾 Cached TTS:', messageId, '| Cache size:', this.cache.size);
+  }
+
+  clear() {
+    this.cache.forEach((entry, key) => {
+      if (entry.url) {
+        URL.revokeObjectURL(entry.url);
+      }
+    });
+    this.cache.clear();
+    console.log('🗑️ Cache cleared');
+  }
+}
+
+const ttsCache = new TTSCache(10);
+
 // ---- TTS Manager with iOS Autoplay Support ----
 class TTSManager {
   constructor() {
@@ -61,16 +111,21 @@ class TTSManager {
     }
   }
 
-  // Enqueue TTS blob for playback
-  enqueueBlob(id, blob) {
-    console.log('➕ Enqueueing blob for:', id);
+  // Enqueue TTS blob for playback (with cache integration)
+  enqueueBlob(id, blob, fromCache = false) {
+    console.log('➕ Enqueueing blob for:', id, fromCache ? '(cached)' : '(new)');
     const url = URL.createObjectURL(blob);
     this.queue.push({ 
       id, 
       url, 
       revoke: () => {
-        console.log('🗑️ Revoking URL for:', id);
-        URL.revokeObjectURL(url);
+        // Only revoke if NOT from cache (cache manages its own URLs)
+        if (!fromCache) {
+          console.log('🗑️ Revoking URL for:', id);
+          URL.revokeObjectURL(url);
+        } else {
+          console.log('⏭️ Skipping revoke for cached:', id);
+        }
       }
     });
     this._process();
@@ -270,13 +325,14 @@ function App() {
 
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
-  const streamRef = useRef(null);
-  const permissionTestStreamRef = useRef(null); // Separate ref for permission test stream
+  const recordingStreamRef = useRef(null); // ✅ RENAMED: Dedicated ref for recording stream
+  const permissionTestStreamRef = useRef(null); // ✅ Separate ref for permission test stream
   const messagesEndRef = useRef(null);
   const abortControllerRef = useRef(null); // For canceling requests
   const recordingStartTimeRef = useRef(null); // Track recording duration
   const isButtonPressedRef = useRef(false); // Track button press state
   const micPermissionGrantedRef = useRef(false); // Track mic permission to avoid stale closure
+  const [showFirstRunScreen, setShowFirstRunScreen] = useState(false); // iOS first-run screen
 
   // Auto-scroll to bottom when new messages arrive
   const scrollToBottom = () => {
@@ -308,6 +364,17 @@ function App() {
       window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
       window.removeEventListener('appinstalled', handleAppInstalled);
     };
+  }, []);
+
+  // Check for iOS first-run screen
+  useEffect(() => {
+    if (isiOS) {
+      const hasSeenFirstRun = localStorage.getItem('hasSeenFirstRunScreen');
+      if (!hasSeenFirstRun) {
+        console.log('📱 iOS first run - showing Enable Audio screen');
+        setShowFirstRunScreen(true);
+      }
+    }
   }, []);
 
   // Check and store microphone permission status
@@ -343,12 +410,12 @@ function App() {
     // Cleanup on unmount
     return () => {
       console.log('Cleaning up audio resources on unmount');
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => {
+      if (recordingStreamRef.current) {
+        recordingStreamRef.current.getTracks().forEach(track => {
           track.stop();
           console.log('Cleanup: stopped track', track.id);
         });
-        streamRef.current = null;
+        recordingStreamRef.current = null;
       }
       if (mediaRecorderRef.current) {
         if (mediaRecorderRef.current.state === 'recording') {
@@ -356,6 +423,8 @@ function App() {
         }
         mediaRecorderRef.current = null;
       }
+      // Clear TTS cache
+      ttsCache.clear();
     };
   }, []);
 
@@ -418,7 +487,7 @@ function App() {
       micPermissionGrantedRef.current = true;
       console.log('✅ Microphone permission granted and stored');
       
-      // Clean up test stream after delay - safe because it's in separate ref
+      // Clean up test stream after longer delay for iOS stability
       setTimeout(() => {
         if (permissionTestStreamRef.current) {
           permissionTestStreamRef.current.getTracks().forEach(track => {
@@ -427,7 +496,7 @@ function App() {
           });
           permissionTestStreamRef.current = null;
         }
-      }, 1000);
+      }, 5000); // ✅ Extended to 5s for iOS
       
     } catch (err) {
       console.error('Microphone permission denied:', err);
@@ -493,7 +562,7 @@ function App() {
       
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
 
-      streamRef.current = stream;
+      recordingStreamRef.current = stream; // ✅ Use dedicated recording ref
       audioChunksRef.current = [];
 
       // Force MP4 for iOS (best compatibility with OpenAI Whisper)
@@ -543,12 +612,12 @@ function App() {
           console.log('Audio blob created:', audioBlob.size, 'bytes');
           
           // Clean up BEFORE processing to prevent interference
-          if (streamRef.current) {
-            streamRef.current.getTracks().forEach(track => {
+          if (recordingStreamRef.current) {
+            recordingStreamRef.current.getTracks().forEach(track => {
               track.stop();
               console.log('Stopped recording track:', track.id, track.readyState);
             });
-            streamRef.current = null;
+            recordingStreamRef.current = null;
           }
           mediaRecorderRef.current = null;
           
@@ -559,9 +628,9 @@ function App() {
           setError('No audio recorded. Try speaking closer to the microphone.');
           
           // Clean up even if no data
-          if (streamRef.current) {
-            streamRef.current.getTracks().forEach(track => track.stop());
-            streamRef.current = null;
+          if (recordingStreamRef.current) {
+            recordingStreamRef.current.getTracks().forEach(track => track.stop());
+            recordingStreamRef.current = null;
           }
           mediaRecorderRef.current = null;
         }
@@ -646,9 +715,9 @@ function App() {
       if (mediaRecorderRef.current?.state === 'recording') {
         mediaRecorderRef.current.stop();
       }
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => track.stop());
-        streamRef.current = null;
+      if (recordingStreamRef.current) {
+        recordingStreamRef.current.getTracks().forEach(track => track.stop());
+        recordingStreamRef.current = null;
       }
       return;
     }
@@ -662,8 +731,8 @@ function App() {
     }
     
     // Force stop all tracks immediately
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => {
+    if (recordingStreamRef.current) {
+      recordingStreamRef.current.getTracks().forEach(track => {
         track.stop();
         console.log('🛑 Track stopped:', track.id);
       });
@@ -899,20 +968,29 @@ function App() {
         console.log('🔊 Auto-playing AI response with IDs:', partsToPlay.map(p => p.messageId));
         console.log('🔊 Using assistant index:', actualAssistantIndex);
         
-        // Fetch and enqueue each part
+        // Fetch and enqueue each part (with caching)
         for (const { text, messageId } of partsToPlay) {
           try {
-            const response = await fetch(`${API_BASE}/tts`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ text })
-            });
-            
-            if (response.ok) {
-              const blob = await response.blob();
-              ttsManager.enqueueBlob(messageId, blob);
+            // Check cache first
+            const cached = ttsCache.get(messageId);
+            if (cached) {
+              console.log('🎵 Auto-play using cached TTS:', messageId);
+              ttsManager.enqueueBlob(messageId, cached.blob, true);
             } else {
-              console.error('TTS fetch failed for', messageId, ':', response.status);
+              // Fetch and cache
+              const response = await fetch(`${API_BASE}/tts`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text })
+              });
+              
+              if (response.ok) {
+                const blob = await response.blob();
+                ttsCache.set(messageId, blob); // ✅ Cache for future use
+                ttsManager.enqueueBlob(messageId, blob);
+              } else {
+                console.error('TTS fetch failed for', messageId, ':', response.status);
+              }
             }
           } catch (e) {
             console.error('Auto-play fetch error for', messageId, ':', e);
@@ -986,19 +1064,27 @@ function App() {
     // Prime under this gesture if needed (safe - won't interrupt active playback)
     await ttsManager.prime();
     
-    // Fetch TTS and enqueue
+    // Check cache first, then fetch if needed
     try {
-      const response = await fetch(`${API_BASE}/tts`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text })
-      });
-      
-      if (response.ok) {
-        const blob = await response.blob();
-        ttsManager.enqueueBlob(messageId, blob);
+      const cached = ttsCache.get(messageId);
+      if (cached) {
+        console.log('🎵 Bubble tap using cached TTS:', messageId);
+        ttsManager.enqueueBlob(messageId, cached.blob, true);
       } else {
-        console.error('TTS fetch failed:', response.status);
+        // Fetch, cache, and play
+        const response = await fetch(`${API_BASE}/tts`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text })
+        });
+        
+        if (response.ok) {
+          const blob = await response.blob();
+          ttsCache.set(messageId, blob); // ✅ Cache for future taps
+          ttsManager.enqueueBlob(messageId, blob);
+        } else {
+          console.error('TTS fetch failed:', response.status);
+        }
       }
     } catch (err) {
       console.error('TTS fetch error:', err);
@@ -1019,10 +1105,70 @@ function App() {
     setError('');
     setTranslations(new Map()); // Clear all translations
     setClickedBubbles(new Set()); // Clear clicked bubbles state
+    ttsCache.clear(); // ✅ Clear TTS cache
   }, []);
+
+  // iOS first-run screen handler
+  const handleEnableAudio = useCallback(async () => {
+    console.log('📱 iOS first-run: Enabling audio...');
+    // Prime audio element
+    await ttsManager.prime();
+    // Request mic permission
+    await requestMicPermissionOnce();
+    // Mark as seen
+    localStorage.setItem('hasSeenFirstRunScreen', 'true');
+    setShowFirstRunScreen(false);
+    console.log('✅ iOS first-run complete');
+  }, [requestMicPermissionOnce]);
 
   return (
     <div className="h-full w-full bg-gray-50 flex flex-col overflow-hidden" style={{ height: '100vh', width: '100vw' }}>
+      {/* iOS First-Run Screen */}
+      {showFirstRunScreen && (
+        <div 
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.9)',
+            zIndex: 9999,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '32px'
+          }}
+        >
+          <div style={{ textAlign: 'center', color: 'white' }}>
+            <div style={{ fontSize: '64px', marginBottom: '24px' }}>🎙️</div>
+            <h2 style={{ fontSize: '28px', fontWeight: 'bold', marginBottom: '16px' }}>
+              Enable Audio
+            </h2>
+            <p style={{ fontSize: '16px', marginBottom: '32px', opacity: 0.9, maxWidth: '320px' }}>
+              To use voice features, we need access to your microphone.
+            </p>
+            <button
+              onClick={handleEnableAudio}
+              style={{
+                backgroundColor: '#3b82f6',
+                color: 'white',
+                fontSize: '18px',
+                fontWeight: 'bold',
+                padding: '16px 48px',
+                borderRadius: '12px',
+                border: 'none',
+                cursor: 'pointer',
+                boxShadow: '0 4px 12px rgba(59, 130, 246, 0.5)'
+              }}
+            >
+              Enable Audio & Microphone
+            </button>
+          </div>
+        </div>
+      )}
+      
       {/* Header - Fixed Height */}
       <header className="bg-white shadow-sm border-b px-4 py-3 shrink-0">
         <div className="flex items-center justify-between">
@@ -1163,6 +1309,8 @@ function App() {
               e.preventDefault();
               e.stopPropagation();
               console.log('👆 PointerDown event fired');
+              // Add holding-mic class for pointer-events isolation
+              document.body.classList.add('holding-mic');
               if (!isProcessing && !isRequestingPermission) {
                 console.log('👆 PointerDown conditions met, calling handleButtonPress');
                 handleButtonPress(e);
@@ -1174,6 +1322,8 @@ function App() {
               e.preventDefault();
               e.stopPropagation();
               console.log('👆 PointerUp event fired');
+              // Remove holding-mic class
+              document.body.classList.remove('holding-mic');
               if (!isRequestingPermission) {
                 console.log('👆 PointerUp calling stopRecording');
                 stopRecording(e);
@@ -1185,6 +1335,8 @@ function App() {
               e.preventDefault();
               e.stopPropagation();
               console.log('👆 PointerCancel event fired');
+              // Remove holding-mic class
+              document.body.classList.remove('holding-mic');
               if (!isRequestingPermission) {
                 stopRecording(e);
               }

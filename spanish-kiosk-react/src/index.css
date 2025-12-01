@@ -79,6 +79,12 @@ html, body {
   -webkit-touch-callout: none !important;
 }
 
+/* Isolate pointer events when holding mic button */
+body.holding-mic .user-bubble,
+body.holding-mic .assistant-bubble {
+  pointer-events: none !important;
+}
+
 /* Override default button styles for mic button - let Tailwind handle colors */
 .mic-button {
   border: none !important;
