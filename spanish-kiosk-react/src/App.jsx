@@ -3,11 +3,12 @@ import React, { useState, useRef, useCallback, useEffect } from 'react';
 // Get API base URL from window or default to localhost for development
 const API_BASE = window.__API_BASE__ || 'http://localhost:3000';
 
-// ---- TTS Cache with LRU Eviction (10 messages max) ----
+// ---- TTS Cache with LRU Eviction (20 messages max) ----
 class TTSCache {
-  constructor(maxSize = 10) {
+  constructor(maxSize = 20) {
     this.cache = new Map(); // messageId -> { blob, url }
     this.maxSize = maxSize;
+    this.playingIds = new Set(); // Track currently playing IDs to prevent eviction
   }
 
   get(messageId) {
@@ -17,27 +18,47 @@ class TTSCache {
       this.cache.delete(messageId);
       this.cache.set(messageId, entry);
       console.log('🎵 Cache HIT:', messageId);
-      return entry;
+      return entry.url; // ✅ Return URL directly, not blob
     }
     console.log('🎵 Cache MISS:', messageId);
     return null;
   }
 
   set(messageId, blob) {
-    // Evict oldest if at capacity
-    if (this.cache.size >= this.maxSize) {
+    // Evict oldest if at capacity (skip if currently playing)
+    while (this.cache.size >= this.maxSize) {
       const oldestKey = this.cache.keys().next().value;
+      
+      // Skip eviction if this audio is currently playing
+      if (this.playingIds.has(oldestKey)) {
+        console.log('⏭️ Skipping eviction of playing audio:', oldestKey);
+        // Move to end to try next oldest
+        const entry = this.cache.get(oldestKey);
+        this.cache.delete(oldestKey);
+        this.cache.set(oldestKey, entry);
+        continue;
+      }
+      
       const oldEntry = this.cache.get(oldestKey);
       if (oldEntry && oldEntry.url) {
         console.log('🗑️ Evicting oldest cache entry:', oldestKey);
         URL.revokeObjectURL(oldEntry.url);
       }
       this.cache.delete(oldestKey);
+      break;
     }
     
     const url = URL.createObjectURL(blob);
     this.cache.set(messageId, { blob, url });
     console.log('💾 Cached TTS:', messageId, '| Cache size:', this.cache.size);
+  }
+
+  markPlaying(messageId) {
+    this.playingIds.add(messageId);
+  }
+
+  markStopped(messageId) {
+    this.playingIds.delete(messageId);
   }
 
   clear() {
@@ -47,11 +68,12 @@ class TTSCache {
       }
     });
     this.cache.clear();
+    this.playingIds.clear();
     console.log('🗑️ Cache cleared');
   }
 }
 
-const ttsCache = new TTSCache(10);
+const ttsCache = new TTSCache(20);
 
 // ---- TTS Manager with iOS Autoplay Support ----
 class TTSManager {
@@ -111,20 +133,28 @@ class TTSManager {
     }
   }
 
-  // Enqueue TTS blob for playback (with cache integration)
-  enqueueBlob(id, blob, fromCache = false) {
-    console.log('➕ Enqueueing blob for:', id, fromCache ? '(cached)' : '(new)');
-    const url = URL.createObjectURL(blob);
+  // Enqueue TTS blob or URL for playback
+  enqueueBlob(id, blobOrUrl, fromCache = false) {
+    console.log('➕ Enqueueing for:', id, fromCache ? '(cached URL)' : '(new blob)');
+    
+    let url;
+    if (fromCache) {
+      // Already a URL from cache
+      url = blobOrUrl;
+    } else {
+      // New blob, create URL
+      url = URL.createObjectURL(blobOrUrl);
+    }
+    
     this.queue.push({ 
       id, 
       url, 
+      fromCache,
       revoke: () => {
         // Only revoke if NOT from cache (cache manages its own URLs)
         if (!fromCache) {
           console.log('🗑️ Revoking URL for:', id);
           URL.revokeObjectURL(url);
-        } else {
-          console.log('⏭️ Skipping revoke for cached:', id);
         }
       }
     });
@@ -156,9 +186,20 @@ class TTSManager {
     this.processing = true;
     console.log('🔄 Starting queue processing, items:', this.queue.length);
 
+    // Suspend microphone during TTS playback to prevent iOS conflicts
+    if (window.suspendMicrophone) {
+      await window.suspendMicrophone();
+    }
+
     while (this.queue.length > 0) {
-      const { id, url, revoke } = this.queue.shift();
+      const { id, url, revoke, fromCache } = this.queue.shift();
       this.playingId = id;
+      
+      // Mark as playing in cache to prevent eviction
+      if (fromCache) {
+        ttsCache.markPlaying(id);
+      }
+      
       console.log('🔊 Playing:', id, '| Remaining:', this.queue.length);
 
       try {
@@ -181,6 +222,10 @@ class TTSManager {
             this.audio.removeEventListener('ended', onEnd);
             this.audio.removeEventListener('error', onErr);
             revoke();
+            // Mark as stopped in cache
+            if (fromCache) {
+              ttsCache.markStopped(id);
+            }
           };
           this.audio.addEventListener('ended', onEnd, { once: true });
           this.audio.addEventListener('error', onErr, { once: true });
@@ -188,6 +233,9 @@ class TTSManager {
       } catch (e) {
         console.error('❌ Playback error for', id, ':', e);
         revoke();
+        if (fromCache) {
+          ttsCache.markStopped(id);
+        }
       } finally {
         this.playingId = null;
       }
@@ -200,6 +248,11 @@ class TTSManager {
 
     this.processing = false;
     console.log('✅ Queue processing complete');
+    
+    // Resume microphone after TTS playback
+    if (window.resumeMicrophone) {
+      await window.resumeMicrophone();
+    }
   }
 }
 
@@ -493,6 +546,50 @@ function App() {
       return false;
     }
   }, []);
+
+  // Suspend microphone during TTS playback (prevents iOS audio ducking)
+  const suspendMicrophone = useCallback(async () => {
+    if (!persistentStreamRef.current) return;
+    
+    try {
+      const tracks = persistentStreamRef.current.getAudioTracks();
+      tracks.forEach(track => {
+        if (track.enabled) {
+          track.enabled = false;
+          console.log('🔇 Mic track suspended:', track.id);
+        }
+      });
+    } catch (err) {
+      console.warn('⚠️ Could not suspend mic:', err);
+    }
+  }, []);
+
+  // Resume microphone after TTS playback
+  const resumeMicrophone = useCallback(async () => {
+    if (!persistentStreamRef.current) return;
+    
+    try {
+      const tracks = persistentStreamRef.current.getAudioTracks();
+      tracks.forEach(track => {
+        if (!track.enabled) {
+          track.enabled = true;
+          console.log('🔊 Mic track resumed:', track.id);
+        }
+      });
+    } catch (err) {
+      console.warn('⚠️ Could not resume mic:', err);
+    }
+  }, []);
+
+  // Expose to window for TTSManager access
+  useEffect(() => {
+    window.suspendMicrophone = suspendMicrophone;
+    window.resumeMicrophone = resumeMicrophone;
+    return () => {
+      delete window.suspendMicrophone;
+      delete window.resumeMicrophone;
+    };
+  }, [suspendMicrophone, resumeMicrophone]);
 
   const requestMicPermissionOnce = useCallback(async () => {
     if (permissionRequested || isRequestingPermission) return;
@@ -789,6 +886,19 @@ function App() {
       if (!sttResponse.ok) {
         const errorText = await sttResponse.text();
         console.error('STT error response:', errorText);
+        
+        // Handle 400 errors - likely stream issue, attempt recovery
+        if (sttResponse.status === 400) {
+          console.log('⚠️ STT 400 error - attempting stream recovery...');
+          setError('Reconnecting microphone...');
+          
+          const recovered = await recoverPersistentStream();
+          if (recovered) {
+            setError('Microphone reconnected. Please try again.');
+            return;
+          }
+        }
+        
         throw new Error(`STT failed: ${sttResponse.status} - ${errorText}`);
       }
 
@@ -1065,10 +1175,10 @@ function App() {
     
     // Check cache first, then fetch if needed
     try {
-      const cached = ttsCache.get(messageId);
-      if (cached) {
-        console.log('🎵 Bubble tap using cached TTS:', messageId);
-        ttsManager.enqueueBlob(messageId, cached.blob, true);
+      const cachedUrl = ttsCache.get(messageId);
+      if (cachedUrl) {
+        console.log('🎵 Bubble tap using cached TTS URL:', messageId);
+        ttsManager.enqueueBlob(messageId, cachedUrl, true);
       } else {
         // Fetch, cache, and play
         const response = await fetch(`${API_BASE}/tts`, {
@@ -1080,7 +1190,7 @@ function App() {
         if (response.ok) {
           const blob = await response.blob();
           ttsCache.set(messageId, blob); // ✅ Cache for future taps
-          ttsManager.enqueueBlob(messageId, blob);
+          ttsManager.enqueueBlob(messageId, blob, false);
         } else {
           console.error('TTS fetch failed:', response.status);
         }
