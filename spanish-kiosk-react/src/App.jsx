@@ -689,6 +689,22 @@ function App() {
       // Use persistent stream for MediaRecorder
       const stream = persistentStreamRef.current;
 
+      // Ensure mic tracks are enabled before recording (may be disabled from TTS suspend)
+      const tracks = stream.getAudioTracks();
+      const allEnabled = tracks.every(t => t.enabled);
+      if (!allEnabled) {
+        console.log('⚠️ Tracks were disabled, enabling now...');
+        tracks.forEach(t => {
+          t.enabled = true;
+          console.log('✅ Enabled track:', t.id);
+        });
+        // Small delay for tracks to fully activate
+        await new Promise(resolve => setTimeout(resolve, 100));
+        console.log('✅ Tracks ready for recording');
+      } else {
+        console.log('✅ All tracks already enabled');
+      }
+
       // Force MP4 for iOS (best compatibility with OpenAI Whisper)
       // For other platforms, try compatible formats
       let mimeType = '';
