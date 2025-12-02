@@ -693,9 +693,6 @@ function App() {
       }
     }
 
-    // Set recording state IMMEDIATELY for instant visual feedback
-    setIsRecording(true);
-
     console.log('🎙️ Starting recording with persistent stream...');
     
     try {
@@ -736,6 +733,10 @@ function App() {
       console.log('✅ Mic tracks confirmed ready for recording');
       const waitDuration = Date.now() - startWait;
       console.log(`⏱️ Ready check took ${waitDuration}ms`);
+
+      // Now that tracks are ready, set recording state for visual feedback
+      setIsRecording(true);
+      recordingStartTimeRef.current = Date.now();
 
       // Force MP4 for iOS (best compatibility with OpenAI Whisper)
       // For other platforms, try compatible formats
@@ -805,8 +806,7 @@ function App() {
       
       // Start recording with data collection interval
       mediaRecorder.start(1000); // Collect data every second
-      recordingStartTimeRef.current = Date.now(); // Track start time
-      // Don't set isRecording again - already set for immediate feedback
+      // Recording state and start time already set after polling
       console.log('Recording started');
       
       // Additional logging for debugging
