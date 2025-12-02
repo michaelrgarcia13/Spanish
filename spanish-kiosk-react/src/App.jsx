@@ -75,7 +75,7 @@ class TTSCache {
 
 const ttsCache = new TTSCache(20);
 
-// ---- TTS Manager with iOS Autoplay Support ----
+// ---- TTS Manager - Simplified (no mic suspend/resume) ----
 class TTSManager {
   constructor() {
     this.audio = null;
@@ -94,55 +94,47 @@ class TTSManager {
     document.body.appendChild(this.audio);
   }
 
-  // Check if audio is currently playing
   isPlaying() {
     return !!this.audio && !this.audio.paused && !this.audio.ended;
   }
 
-  // Call during user gesture to unlock autoplay
   async prime() {
     this.ensureAudioEl();
     
-    // Already primed or currently priming
     if (this.primed || this._priming) {
-      console.log('✅ Audio already primed or priming in progress');
+      console.log('✅ Audio already primed');
       return;
     }
 
-    // ✅ Do NOT prime if we're in the middle of playing or processing
     if (this.isPlaying() || this.processing || (this.queue && this.queue.length > 0)) {
-      console.log('⏭️ Skipping prime - audio already active');
+      console.log('⏭️ Skipping prime - audio active');
       return;
     }
 
     this._priming = true;
     try {
-      console.log('🔓 Priming audio element...');
-      // 50ms silent MP3 data URI
+      console.log('🔓 Priming audio...');
       this.audio.src = 'data:audio/mp3;base64,//uQZAAAAAAAAAAAAAAAAAAAAAAAWGluZwAAAA8AAAACAAACcQCA//////////////////////////////////////////////////8AAAA8TEFNRTMuMTAwA8MAAAAAAAAAABSAJAMGQgAAgAAAgnEWjwvdAAAAAAAAAAAAAAAAAAAA//sQZAAP8AAAaQAAAAgAAA0gAAABAAABpAAAACAAADSAAAAETEFNRTMuMTAwVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV';
       await this.audio.play();
       this.audio.pause();
       this.audio.currentTime = 0;
       this.primed = true;
-      console.log('✅ Audio primed successfully');
+      console.log('✅ Audio primed');
     } catch (e) {
-      console.warn('⚠️ Audio priming failed:', e.message);
+      console.warn('⚠️ Priming failed:', e.message);
       this.primed = false;
     } finally {
       this._priming = false;
     }
   }
 
-  // Enqueue TTS blob or URL for playback
   enqueueBlob(id, blobOrUrl, fromCache = false) {
-    console.log('➕ Enqueueing for:', id, fromCache ? '(cached URL)' : '(new blob)');
+    console.log('➕ Enqueue:', id, fromCache ? '(cached)' : '(new)');
     
     let url;
     if (fromCache) {
-      // Already a URL from cache
       url = blobOrUrl;
     } else {
-      // New blob, create URL
       url = URL.createObjectURL(blobOrUrl);
     }
     
@@ -151,26 +143,19 @@ class TTSManager {
       url, 
       fromCache,
       revoke: () => {
-        // Only revoke if NOT from cache (cache manages its own URLs)
         if (!fromCache) {
-          console.log('🗑️ Revoking URL for:', id);
           URL.revokeObjectURL(url);
         }
       }
     });
+    
     this._process();
   }
 
-  // Stop if same message is playing
   stopIfPlaying(id) {
-    if (this.playingId && this.playingId === id && this.audio) {
-      console.log('🛑 Stopping currently playing message:', id);
-      try {
-        this.audio.pause();
-        this.audio.currentTime = 0;
-      } catch (e) {
-        console.error('Error pausing audio:', e);
-      }
+    if (this.playingId === id && this.isPlaying()) {
+      this.audio.pause();
+      this.audio.currentTime = 0;
       this.playingId = null;
       return true;
     }
@@ -179,42 +164,35 @@ class TTSManager {
 
   async _process() {
     if (this.processing || !this.queue.length) {
-      if (this.processing) console.log('⏸️ Queue already processing');
+      if (this.processing) console.log('⏸️ Already processing');
       return;
     }
 
     this.processing = true;
-    console.log('🔄 Starting queue processing, items:', this.queue.length);
-
-    // Suspend microphone during TTS playback to prevent iOS conflicts
-    if (window.suspendMicrophone) {
-      await window.suspendMicrophone();
-    }
+    console.log('🔄 Processing queue, items:', this.queue.length);
 
     while (this.queue.length > 0) {
       const { id, url, revoke, fromCache } = this.queue.shift();
       this.playingId = id;
       
-      // Mark as playing in cache to prevent eviction
       if (fromCache) {
         ttsCache.markPlaying(id);
       }
       
-      console.log('🔊 Playing:', id, '| Remaining:', this.queue.length);
+      console.log('🔊 Playing:', id);
 
       try {
         this.audio.src = url;
         await this.audio.play();
         
-        // Wait for audio to finish
         await new Promise((resolve) => {
           const onEnd = () => {
-            console.log('✅ Audio ended:', id);
+            console.log('✅ Ended:', id);
             cleanup();
             resolve();
           };
           const onErr = (e) => {
-            console.error('❌ Audio error:', id, e);
+            console.error('❌ Error:', id, e);
             cleanup();
             resolve();
           };
@@ -222,7 +200,6 @@ class TTSManager {
             this.audio.removeEventListener('ended', onEnd);
             this.audio.removeEventListener('error', onErr);
             revoke();
-            // Mark as stopped in cache
             if (fromCache) {
               ttsCache.markStopped(id);
             }
@@ -231,7 +208,7 @@ class TTSManager {
           this.audio.addEventListener('error', onErr, { once: true });
         });
       } catch (e) {
-        console.error('❌ Playback error for', id, ':', e);
+        console.error('❌ Playback error:', id, e);
         revoke();
         if (fromCache) {
           ttsCache.markStopped(id);
@@ -240,25 +217,19 @@ class TTSManager {
         this.playingId = null;
       }
 
-      // Small pause between messages
       if (this.queue.length > 0) {
         await new Promise(resolve => setTimeout(resolve, 200));
       }
     }
 
     this.processing = false;
-    console.log('✅ Queue processing complete');
-    
-    // Resume microphone after TTS playback
-    if (window.resumeMicrophone) {
-      await window.resumeMicrophone();
-    }
+    console.log('✅ Queue complete');
   }
 }
 
 const ttsManager = new TTSManager();
 
-// Detect iOS for better defaults
+// Detect iOS
 const isiOS = typeof navigator !== 'undefined' && /iP(hone|ad|od)/.test(navigator.userAgent);
 
 // UI Components  
@@ -298,62 +269,54 @@ function MessageBubble({ text, isUser, label, onSpeak, messageId, translation, h
             textTransform: 'uppercase',
             letterSpacing: '0.05em',
             paddingLeft: '12px',
-            userSelect: 'text'
           }}>
             {label}
           </div>
         )}
-        <div
-          onClick={(e) => onSpeak(text, messageId, e)}
-          title="Click anywhere on this bubble to hear it spoken aloud and see English translation"
+        <div 
+          onClick={(e) => onSpeak && onSpeak(text, messageId, e)}
           style={{
             ...bubbleStyle,
             padding: '16px 20px',
-            cursor: 'pointer',
-            userSelect: 'text',
-            boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)',
+            fontSize: '17px',
+            lineHeight: '1.5',
+            boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
+            cursor: onSpeak ? 'pointer' : 'default',
             transition: 'all 0.2s ease',
-            fontWeight: '500',
-            lineHeight: '1.5'
           }}
-          className={isUser ? 'user-bubble' : 'assistant-bubble'}
+          onMouseEnter={(e) => {
+            if (onSpeak) {
+              e.currentTarget.style.transform = 'scale(1.02)';
+              e.currentTarget.style.boxShadow = '0 4px 12px rgba(0,0,0,0.12)';
+            }
+          }}
+          onMouseLeave={(e) => {
+            if (onSpeak) {
+              e.currentTarget.style.transform = 'scale(1)';
+              e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.08)';
+            }
+          }}
         >
-          <div style={{ 
-            whiteSpace: 'pre-wrap',
-            userSelect: 'text',
-            fontSize: '16px'
-          }}>
-            {text}
-          </div>
-          {translation && hasBeenClicked && (
-            <div style={{
-              marginTop: '12px',
-              paddingTop: '10px',
-              borderTop: isUser 
-                ? '1px solid rgba(255, 255, 255, 0.3)' 
-                : '1px solid rgba(0, 0, 0, 0.1)',
-              fontSize: '14px',
-              fontStyle: 'italic',
-              opacity: isUser ? '0.9' : '0.7',
-              color: isUser ? 'rgba(255, 255, 255, 0.9)' : '#6b7280',
-              backgroundColor: isUser 
-                ? 'rgba(255, 255, 255, 0.1)' 
-                : 'rgba(0, 0, 0, 0.02)',
-              borderRadius: '6px',
-              padding: '6px 8px',
-              lineHeight: '1.4'
-            }}>
-              💬 {translation}
-            </div>
-          )}
+          {text}
         </div>
+        
+        {translation && hasBeenClicked && (
+          <div style={{
+            fontSize: '14px',
+            color: '#6b7280',
+            marginTop: '8px',
+            fontStyle: 'italic',
+            paddingLeft: '12px',
+          }}>
+            {translation}
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
 function App() {
-  // Initialize with a structured greeting using new simplified format
   const [messages, setMessages] = useState([
     { 
       role: "assistant", 
@@ -363,7 +326,6 @@ function App() {
     }
   ]);
   
-
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [showEnglish, setShowEnglish] = useState(false);
@@ -372,23 +334,20 @@ function App() {
   const [deferredPrompt, setDeferredPrompt] = useState(null);
   const [micPermissionGranted, setMicPermissionGranted] = useState(false);
   const [permissionRequested, setPermissionRequested] = useState(false);
-  const [isRequestingPermission, setIsRequestingPermission] = useState(false); // New state for permission flow
-  const [translations, setTranslations] = useState(new Map()); // Track translations for messages
-  const [clickedBubbles, setClickedBubbles] = useState(new Set()); // Track which bubbles have been clicked
-  const [isListening, setIsListening] = useState(false); // Persistent mic listening state
+  const [isRequestingPermission, setIsRequestingPermission] = useState(false);
+  const [translations, setTranslations] = useState(new Map());
+  const [clickedBubbles, setClickedBubbles] = useState(new Set());
 
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
-  const persistentStreamRef = useRef(null); // 🎤 Persistent mic stream (stays alive entire session)
-  const micTracksReadyRef = useRef(false); // 🎯 Track if mic is ready for recording
+  const currentStreamRef = useRef(null); // Fresh stream per recording
   const messagesEndRef = useRef(null);
-  const abortControllerRef = useRef(null); // For canceling requests
-  const recordingStartTimeRef = useRef(null); // Track recording duration
-  const isButtonPressedRef = useRef(false); // Track button press state
-  const micPermissionGrantedRef = useRef(false); // Track mic permission to avoid stale closure
-  const [showFirstRunScreen, setShowFirstRunScreen] = useState(false); // iOS first-run screen
+  const abortControllerRef = useRef(null);
+  const recordingStartTimeRef = useRef(null);
+  const isButtonPressedRef = useRef(false);
+  const micPermissionGrantedRef = useRef(false);
+  const [showFirstRunScreen, setShowFirstRunScreen] = useState(false);
 
-  // Auto-scroll to bottom when new messages arrive
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   };
@@ -397,7 +356,6 @@ function App() {
     scrollToBottom();
   }, [messages]);
 
-  // PWA Install Prompt
   useEffect(() => {
     const handleBeforeInstallPrompt = (e) => {
       e.preventDefault();
@@ -406,9 +364,8 @@ function App() {
     };
 
     const handleAppInstalled = () => {
-      console.log('PWA was installed');
+      console.log('PWA installed');
       setShowInstallPrompt(false);
-      setDeferredPrompt(null);
     };
 
     window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
@@ -420,56 +377,51 @@ function App() {
     };
   }, []);
 
-  // Check for iOS first-run screen
   useEffect(() => {
     if (isiOS) {
       const hasSeenFirstRun = localStorage.getItem('hasSeenFirstRunScreen');
       if (!hasSeenFirstRun) {
-        console.log('📱 iOS first run - showing Enable Audio screen');
+        console.log('📱 iOS first run');
         setShowFirstRunScreen(true);
       }
     }
   }, []);
 
-  // Check and store microphone permission status
   useEffect(() => {
     const checkPermission = async () => {
       try {
-        // Check if permission was already granted before
         const storedPermission = localStorage.getItem('micPermissionGranted');
         if (storedPermission === 'true') {
           setMicPermissionGranted(true);
           micPermissionGrantedRef.current = true;
-          console.log('Microphone permission already granted (from storage)');
+          console.log('Mic permission from storage');
           return;
         }
 
-        // Try to check current permission status
         if (navigator.permissions) {
           const permissionStatus = await navigator.permissions.query({ name: 'microphone' });
           if (permissionStatus.state === 'granted') {
             setMicPermissionGranted(true);
             micPermissionGrantedRef.current = true;
             localStorage.setItem('micPermissionGranted', 'true');
-            console.log('Microphone permission already granted (from browser)');
+            console.log('Mic permission from browser');
           }
         }
       } catch (err) {
-        console.log('Could not check microphone permission status:', err);
+        console.log('Could not check mic permission:', err);
       }
     };
 
     checkPermission();
 
-    // Cleanup on unmount
     return () => {
-      console.log('Cleaning up audio resources on unmount');
-      if (persistentStreamRef.current) {
-        persistentStreamRef.current.getTracks().forEach(track => {
+      console.log('Cleanup on unmount');
+      if (currentStreamRef.current) {
+        currentStreamRef.current.getTracks().forEach(track => {
           track.stop();
-          console.log('Cleanup: stopped persistent stream track', track.id);
+          console.log('Cleanup: stopped track', track.id);
         });
-        persistentStreamRef.current = null;
+        currentStreamRef.current = null;
       }
       if (mediaRecorderRef.current) {
         if (mediaRecorderRef.current.state === 'recording') {
@@ -477,7 +429,6 @@ function App() {
         }
         mediaRecorderRef.current = null;
       }
-      // Clear TTS cache
       ttsCache.clear();
     };
   }, []);
@@ -487,7 +438,7 @@ function App() {
       deferredPrompt.prompt();
       deferredPrompt.userChoice.then((choiceResult) => {
         if (choiceResult.outcome === 'accepted') {
-          console.log('User accepted the install prompt');
+          console.log('Install accepted');
         }
         setDeferredPrompt(null);
         setShowInstallPrompt(false);
@@ -495,138 +446,14 @@ function App() {
     }
   };
 
-  // Cancel processing function
   const cancelProcessing = useCallback(() => {
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
-      abortControllerRef.current = null;
+      console.log('Request cancelled');
     }
     setIsProcessing(false);
-    setError('Request cancelled');
-    console.log('Processing cancelled by user');
+    setError('');
   }, []);
-
-  // Check if persistent stream is healthy
-  const checkStreamHealth = useCallback(() => {
-    if (!persistentStreamRef.current) return false;
-    const tracks = persistentStreamRef.current.getTracks();
-    const isHealthy = tracks.length > 0 && tracks[0].readyState === 'live';
-    console.log('🔍 Stream health check:', isHealthy, '| Tracks:', tracks.length);
-    return isHealthy;
-  }, []);
-
-  // Recover persistent stream if it dies
-  const recoverPersistentStream = useCallback(async () => {
-    console.log('🔄 Recovering persistent stream...');
-    
-    // Stop old stream tracks first to prevent orphaned streams
-    if (persistentStreamRef.current) {
-      console.log('🛑 Stopping old stream tracks before recovery');
-      persistentStreamRef.current.getTracks().forEach(track => {
-        track.stop();
-        console.log('🛑 Stopped orphaned track:', track.id);
-      });
-      persistentStreamRef.current = null;
-    }
-    
-    try {
-      const constraints = {
-        audio: {
-          sampleRate: { ideal: 16000, min: 8000, max: 48000 },
-          channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-          ...(isiOS && {
-            sampleSize: 16,
-            volume: 1.0
-          })
-        }
-      };
-      
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      persistentStreamRef.current = stream;
-      micTracksReadyRef.current = true; // Mark as ready
-      setIsListening(true);
-      console.log('✅ Persistent stream recovered');
-      return true;
-    } catch (err) {
-      console.error('❌ Stream recovery failed:', err);
-      setError('Microphone access lost. Please refresh and grant permission again.');
-      setMicPermissionGranted(false);
-      micPermissionGrantedRef.current = false;
-      setIsListening(false);
-      return false;
-    }
-  }, []);
-
-  // Suspend microphone during TTS playback (prevents iOS audio ducking)
-  const suspendMicrophone = useCallback(async () => {
-    if (!persistentStreamRef.current) return;
-    
-    micTracksReadyRef.current = false; // Mark as not ready
-    console.log('🔇 Suspending microphone...');
-    
-    try {
-      const tracks = persistentStreamRef.current.getAudioTracks();
-      tracks.forEach(track => {
-        if (track.enabled) {
-          track.enabled = false;
-          console.log('🔇 Mic track suspended:', track.id);
-        }
-      });
-    } catch (err) {
-      console.warn('⚠️ Could not suspend mic:', err);
-    }
-  }, []);
-
-  // Resume microphone after TTS playback
-  const resumeMicrophone = useCallback(async () => {
-    if (!persistentStreamRef.current) return;
-    
-    console.log('🔊 Resuming microphone...');
-    
-    try {
-      const tracks = persistentStreamRef.current.getAudioTracks();
-      tracks.forEach(track => {
-        if (!track.enabled) {
-          track.enabled = true;
-          console.log('🔊 Mic track resumed:', track.id);
-        }
-      });
-      
-      // Wait a moment for tracks to fully stabilize
-      await new Promise(resolve => setTimeout(resolve, 150));
-      
-      // Verify stream is still healthy after resume
-      const healthyTracks = persistentStreamRef.current.getAudioTracks();
-      const isHealthy = healthyTracks.length > 0 && healthyTracks.every(t => t.readyState === 'live');
-      
-      if (!isHealthy) {
-        console.warn('⚠️ Stream unhealthy after resume - iOS may have killed it');
-        micTracksReadyRef.current = false;
-        persistentStreamRef.current = null;
-        return;
-      }
-      
-      micTracksReadyRef.current = true; // Mark as ready
-      console.log('✅ Microphone fully ready and healthy');
-    } catch (err) {
-      console.warn('⚠️ Could not resume mic:', err);
-      micTracksReadyRef.current = false;
-      persistentStreamRef.current = null;
-    }
-  }, []);
-
-  // Expose to window for TTSManager access
-  useEffect(() => {
-    window.suspendMicrophone = suspendMicrophone;
-    window.resumeMicrophone = resumeMicrophone;
-    return () => {
-      delete window.suspendMicrophone;
-      delete window.resumeMicrophone;
-    };
-  }, [suspendMicrophone, resumeMicrophone]);
 
   const requestMicPermissionOnce = useCallback(async () => {
     if (permissionRequested || isRequestingPermission) return;
@@ -634,9 +461,8 @@ function App() {
     try {
       setIsRequestingPermission(true);
       setPermissionRequested(true);
-      console.log('🎤 Requesting persistent microphone access...');
+      console.log('🎤 Requesting mic permission (prime)...');
       
-      // Enhanced audio constraints for better mobile compatibility
       const constraints = {
         audio: {
           sampleRate: { ideal: 16000, min: 8000, max: 48000 },
@@ -644,293 +470,199 @@ function App() {
           echoCancellation: true,
           noiseSuppression: true,
           autoGainControl: true,
-          // iOS-specific optimizations
-          ...(isiOS && {
-            sampleSize: 16,
-            volume: 1.0
-          })
+          ...(isiOS && { sampleSize: 16, volume: 1.0 })
         }
       };
       
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
       
-      // Store as PERSISTENT stream (never stopped until session ends)
-      persistentStreamRef.current = stream;
-      micTracksReadyRef.current = true; // Mark as ready initially
+      // Stop immediately - just priming permission
+      stream.getTracks().forEach(track => track.stop());
       
-      // Store permission in localStorage
       localStorage.setItem('micPermissionGranted', 'true');
       setMicPermissionGranted(true);
       micPermissionGrantedRef.current = true;
-      setIsListening(true); // Show listening indicator
-      console.log('✅ Persistent microphone access granted - stream will stay active');
-      console.log('🎤 Stream tracks:', stream.getTracks().map(t => ({id: t.id, kind: t.kind, readyState: t.readyState})));
+      console.log('✅ Mic permission granted');
       
     } catch (err) {
-      console.error('Microphone permission denied:', err);
-      setError('Microphone permission denied. Please enable it in your browser settings.');
+      console.error('Mic permission denied:', err);
+      setError('Microphone permission denied. Enable in browser settings.');
       setPermissionRequested(false);
     } finally {
       setIsRequestingPermission(false);
     }
   }, [permissionRequested, isRequestingPermission]);
 
-  // Define startRecording BEFORE handleButtonPress so it can be used in dependencies
   const startRecording = useCallback(async (e) => {
-    console.log('🎤 startRecording called');
+    console.log('🎤 startRecording');
     
-    // Prevent default behavior and stop event propagation
     if (e) {
       e.preventDefault();
       e.stopPropagation();
     }
 
-    console.log('🎤 Current state check:', {
-      isRecording,
-      isProcessing,
-      isRequestingPermission,
-      micPermissionGranted,
-      isListening
-    });
-
-    // Prevent starting if already recording, processing, or requesting permission
     if (isRecording || isProcessing || isRequestingPermission) {
-      console.log('🎤 Already recording, processing, or requesting permission - ignoring start request');
+      console.log('🎤 Busy - ignoring');
       return;
     }
 
-    // Must have permission to record
     if (!micPermissionGranted) {
-      console.log('🎤 No microphone permission - cannot start recording');
+      console.log('🎤 No permission');
       return;
     }
 
-    // Check if persistent stream is healthy, recover if needed
-    if (!checkStreamHealth()) {
-      console.log('⚠️ Persistent stream unhealthy, attempting recovery...');
-      const recovered = await recoverPersistentStream();
-      if (!recovered) {
-        console.log('❌ Could not recover stream');
-        return;
-      }
-    }
-
-    console.log('🎙️ Starting recording with persistent stream...');
+    console.log('🎙️ Getting fresh stream...');
     
     try {
       setError('');
       audioChunksRef.current = [];
 
-      // Use persistent stream for MediaRecorder
-      const stream = persistentStreamRef.current;
-
-      // Poll for mic tracks to be ready (wait for resume to complete)
-      console.log('🔍 Checking if mic tracks are ready...');
-      const startWait = Date.now();
-      const maxWaitTime = 2000; // 2 second timeout
-      
-      while (!micTracksReadyRef.current) {
-        if (Date.now() - startWait > maxWaitTime) {
-          console.log('⏱️ Timeout waiting for tracks, forcing enable...');
-          break;
+      const constraints = {
+        audio: {
+          sampleRate: { ideal: 16000, min: 8000, max: 48000 },
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          ...(isiOS && { sampleSize: 16, volume: 1.0 })
         }
-        console.log('⏳ Waiting for mic tracks to be ready...');
-        await new Promise(resolve => setTimeout(resolve, 50));
-      }
+      };
       
-      // Double-check tracks are actually enabled
-      const tracks = stream.getAudioTracks();
-      const allEnabled = tracks.every(t => t.enabled);
-      if (!allEnabled) {
-        console.log('⚠️ Tracks still disabled after wait, enabling now...');
-        tracks.forEach(t => {
-          t.enabled = true;
-          console.log('✅ Force-enabled track:', t.id);
-        });
-        // Small delay for tracks to activate
-        await new Promise(resolve => setTimeout(resolve, 100));
-        micTracksReadyRef.current = true; // Mark as ready
-      }
-      
-      console.log('✅ Mic tracks confirmed ready for recording');
-      const waitDuration = Date.now() - startWait;
-      console.log(`⏱️ Ready check took ${waitDuration}ms`);
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      currentStreamRef.current = stream;
+      console.log('✅ Fresh stream acquired');
 
-      // Now that tracks are ready, set recording state for visual feedback
       setIsRecording(true);
       recordingStartTimeRef.current = Date.now();
 
-      // Force MP4 for iOS (best compatibility with OpenAI Whisper)
-      // For other platforms, try compatible formats
       let mimeType = '';
       if (isiOS) {
-        // iOS Safari only supports MP4
         mimeType = 'audio/mp4';
-        console.log('iOS detected - using audio/mp4');
       } else {
-        // Try formats in order of Whisper compatibility
-        const mimeTypesToTry = [
-          'audio/mp4',
-          'audio/webm;codecs=opus',
-          'audio/webm',
-          'audio/ogg'
-        ];
-        
-        for (const type of mimeTypesToTry) {
+        const types = ['audio/mp4', 'audio/webm;codecs=opus', 'audio/webm', 'audio/ogg'];
+        for (const type of types) {
           if (MediaRecorder.isTypeSupported(type)) {
             mimeType = type;
-            console.log('Selected MIME type:', mimeType);
             break;
           }
         }
       }
       
       const mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : {});
-      console.log('MediaRecorder created with mimeType:', mediaRecorder.mimeType);
 
       mediaRecorder.ondataavailable = (event) => {
-        console.log('Data available:', event.data.size, 'bytes');
         if (event.data.size > 0) {
           audioChunksRef.current.push(event.data);
         }
       };
 
       mediaRecorder.onstop = async () => {
-        console.log('MediaRecorder stopped, chunks collected:', audioChunksRef.current.length);
+        console.log('MediaRecorder stopped');
         
-        // Process the audio if we have data
+        // Stop stream immediately
+        if (currentStreamRef.current) {
+          currentStreamRef.current.getTracks().forEach(track => {
+            track.stop();
+            console.log('🛑 Stopped track:', track.id);
+          });
+          currentStreamRef.current = null;
+        }
+        
         if (audioChunksRef.current.length > 0) {
-          // Use the actual MIME type from the recorder
-          const blobType = mediaRecorder.mimeType || mimeType || 'audio/webm';
-          console.log('Creating blob with type:', blobType);
-          const audioBlob = new Blob(audioChunksRef.current, { type: blobType });
-          console.log('Audio blob created:', audioBlob.size, 'bytes');
-          
-          // Clean up MediaRecorder (but keep persistent stream alive)
+          const audioBlob = new Blob(audioChunksRef.current, { type: mediaRecorder.mimeType || mimeType });
+          console.log('Audio blob:', audioBlob.size, 'bytes');
           mediaRecorderRef.current = null;
-          console.log('🎤 MediaRecorder stopped, persistent stream still listening');
-          
           await processAudio(audioBlob);
         } else {
-          console.log('No audio data collected');
+          console.log('No audio data');
           setIsProcessing(false);
           setError('No audio recorded. Try speaking closer to the microphone.');
-          
-          // Clean up MediaRecorder (but keep persistent stream alive)
           mediaRecorderRef.current = null;
         }
       };
 
       mediaRecorderRef.current = mediaRecorder;
-      
-      // Reset audio chunks before starting
       audioChunksRef.current = [];
-      
-      // Start recording with data collection interval
-      mediaRecorder.start(1000); // Collect data every second
-      // Recording state and start time already set after polling
-      console.log('Recording started');
-      
-      // Additional logging for debugging
-      console.log('MediaRecorder state:', mediaRecorder.state);
-      console.log('Stream active:', stream.active);
-      console.log('Stream tracks:', stream.getTracks().map(t => ({id: t.id, kind: t.kind, enabled: t.enabled, readyState: t.readyState})));
-      
+      mediaRecorder.start(1000);
+      console.log('🎙️ Recording started');
     } catch (err) {
       setError('Error starting recording: ' + err.message);
       setIsRecording(false);
+      if (currentStreamRef.current) {
+        currentStreamRef.current.getTracks().forEach(track => track.stop());
+        currentStreamRef.current = null;
+      }
       console.error('Recording error:', err);
     }
-  }, [isRecording, isProcessing, micPermissionGranted, isRequestingPermission, isListening, checkStreamHealth, recoverPersistentStream]);
+  }, [isRecording, isProcessing, micPermissionGranted, isRequestingPermission]);
 
-  // Simple, direct button press handler - no complex dependencies
   const handleButtonPress = useCallback(async (e) => {
     e?.preventDefault();
     e?.stopPropagation();
     
-    console.log('🎯 Button pressed - Permission:', micPermissionGrantedRef.current);
-    
-    // Prime audio element during user gesture for iOS autoplay
-    await ttsManager.prime();
-    
-    // Don't do anything if already busy
-    if (isProcessing || isRequestingPermission || isRecording) {
-      console.log('🎯 Busy - ignoring press');
-      return;
-    }
+    if (isButtonPressedRef.current) return;
+    isButtonPressedRef.current = true;
 
-    // If no permission, request it and EXIT (don't record)
     if (!micPermissionGrantedRef.current) {
-      console.log('🎯 Requesting permission...');
-      requestMicPermissionOnce();
-      return;
+      await requestMicPermissionOnce();
+      if (!micPermissionGrantedRef.current) {
+        isButtonPressedRef.current = false;
+        return;
+      }
     }
 
-    // Have permission - start recording immediately
-    console.log('🎯 Starting recording NOW');
-    startRecording(e);
-  }, [isProcessing, isRequestingPermission, isRecording, requestMicPermissionOnce, startRecording]);
+    await startRecording(e);
+  }, [requestMicPermissionOnce, startRecording]);
 
-  // Simple, direct stop handler
   const stopRecording = useCallback((e) => {
     e?.preventDefault();
     e?.stopPropagation();
 
     console.log('🛑 Button released');
+    isButtonPressedRef.current = false;
     
-    // Don't stop if we're requesting permission
     if (isRequestingPermission) {
-      console.log('🛑 Requesting permission - ignoring release');
+      console.log('🛑 Requesting permission - ignoring');
       return;
     }
     
-    // Don't stop if not recording
     if (!isRecording) {
-      console.log('🛑 Not recording - ignoring release');
+      console.log('🛑 Not recording - ignoring');
       return;
     }
 
-    // Check minimum recording duration (800ms minimum for valid audio)
     const recordingDuration = Date.now() - (recordingStartTimeRef.current || 0);
     if (recordingDuration < 800) {
-      console.log('⚠️ Recording too short:', recordingDuration + 'ms - ignoring');
+      console.log('⚠️ Too short:', recordingDuration + 'ms');
       setIsRecording(false);
-      // Stop MediaRecorder only
       if (mediaRecorderRef.current?.state === 'recording') {
         mediaRecorderRef.current.stop();
       }
       return;
     }
 
-    console.log('🛑 Stopping recording NOW (duration:', recordingDuration + 'ms)');
+    console.log('🛑 Stopping recording (duration:', recordingDuration + 'ms)');
     setIsRecording(false);
     
-    // Stop MediaRecorder only (persistent stream keeps listening)
     if (mediaRecorderRef.current?.state === 'recording') {
       mediaRecorderRef.current.stop();
-      console.log('🛑 MediaRecorder stopped, persistent stream still active');
+      console.log('🛑 MediaRecorder stopped');
     }
   }, [isRecording, isRequestingPermission]);
 
   const processAudio = useCallback(async (audioBlob) => {
     setIsProcessing(true);
-    setError(''); // Clear any previous errors
+    setError('');
     
-    console.log('Processing audio blob:', {
-      size: audioBlob.size,
-      type: audioBlob.type
-    });
+    console.log('Processing audio:', audioBlob.size, 'bytes');
     
-    // Create abort controller for this request
     abortControllerRef.current = new AbortController();
     const signal = abortControllerRef.current.signal;
     
     try {
-      // Send to speech-to-text
       const formData = new FormData();
       
-      // Determine filename based on MIME type for OpenAI compatibility
-      let filename = 'audio.mp4'; // Default for iOS
+      let filename = 'audio.mp4';
       if (audioBlob.type.includes('webm')) {
         filename = 'audio.webm';
       } else if (audioBlob.type.includes('ogg')) {
@@ -940,123 +672,72 @@ function App() {
       }
       
       formData.append('audio', audioBlob, filename);
-      console.log('Sending audio as:', filename, 'type:', audioBlob.type);
 
-      console.log('Sending STT request to:', `${API_BASE}/stt`);
       const sttResponse = await fetch(`${API_BASE}/stt`, {
         method: 'POST',
         body: formData,
-        signal // Add abort signal
+        signal
       });
 
-      if (signal.aborted) return; // Check if cancelled
-
-      console.log('STT response status:', sttResponse.status);
+      if (signal.aborted) return;
 
       if (!sttResponse.ok) {
         const errorText = await sttResponse.text();
-        console.error('STT error response:', errorText);
-        
-        // Handle 400 errors - likely stream issue, attempt recovery
-        if (sttResponse.status === 400) {
-          console.log('⚠️ STT 400 error - attempting stream recovery...');
-          setError('Reconnecting microphone...');
-          
-          const recovered = await recoverPersistentStream();
-          if (recovered) {
-            setError('Microphone reconnected. Please try again.');
-            return;
-          }
-        }
-        
-        throw new Error(`STT failed: ${sttResponse.status} - ${errorText}`);
+        console.error('STT error:', errorText);
+        throw new Error(`STT failed: ${sttResponse.status}`);
       }
 
       const sttData = await sttResponse.json();
-      console.log('STT response data:', sttData);
       const userText = sttData.text || '';
-      console.log('Extracted user text:', userText);
 
-      // Filter out known Whisper artifacts and spurious responses
       const isSpuriousResponse = (text) => {
         const lowerText = text.toLowerCase().trim();
         const spuriousPatterns = [
-          // Amara.org subtitle artifacts
           'subtítulos realizados por la comunidad de amara.org',
           'subtitulos realizados por la comunidad de amara.org',
           'subtitles made by the amara.org community',
-          'subtitles by amara.org',
-          // Other common Whisper artifacts
           'thank you for watching',
-          'thanks for watching',
-          'transcribed by',
-          'captioned by',
           'www.amara.org',
           'amara.org',
-          // Very short meaningless responses
-          '.',
-          ',',
-          '?',
-          '!',
-          'um',
-          'uh',
-          'mm',
-          'hmm'
         ];
         
-        // Check if text matches any spurious patterns
-        // For punctuation-only patterns, use exact match; for others use includes
         const punctuationOnly = ['.', ',', '?', '!'];
         return spuriousPatterns.some(pattern => {
           if (punctuationOnly.includes(pattern)) {
-            return lowerText === pattern; // Exact match for punctuation
+            return lowerText === pattern;
           } else {
-            return lowerText.includes(pattern); // Includes match for phrases
+            return lowerText.includes(pattern);
           }
-        }) || lowerText.length < 2; // Also filter very short responses
+        }) || lowerText.length < 2;
       };
 
-      const isSpurious = isSpuriousResponse(userText);
-      console.log('Text filtering check:', {
-        text: userText,
-        trimmed: userText.trim(),
-        isEmpty: !userText.trim(),
-        isSpurious: isSpurious,
-        willBeFiltered: !userText.trim() || isSpurious
-      });
-
-      if (!userText.trim() || isSpurious) {
-        console.log('Text filtered out as spurious or empty');
-        setError('No speech detected. Try speaking louder or closer to the microphone.');
+      if (!userText.trim() || isSpuriousResponse(userText)) {
+        console.log('Text filtered as spurious');
+        setError('No speech detected. Try speaking louder.');
         return;
       }
 
-      console.log('Text passed filtering, processing message...');
-
-      // Add user message
       const newUserMessage = { role: 'user', text: userText };
       setMessages(prev => [...prev, newUserMessage]);
 
-      // Convert to simple format for backend
       const simpleHistory = [...messages, { role: 'user', content: userText }].map(msg => ({
         role: msg.role,
         content: msg.text || msg.content || [msg.correction_es, msg.reply_es].filter(Boolean).join(' ')
       }));
 
-      if (signal.aborted) return; // Check if cancelled before chat request
+      if (signal.aborted) return;
 
-      // Send to chat with translation flag (always request translations for pre-caching)
       const chatResponse = await fetch(`${API_BASE}/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
           messages: simpleHistory, 
-          translate: true // Always request translations for pre-caching
+          translate: true
         }),
-        signal // Add abort signal
+        signal
       });
 
-      if (signal.aborted) return; // Check if cancelled
+      if (signal.aborted) return;
 
       if (!chatResponse.ok) {
         throw new Error(`Chat failed: ${chatResponse.status}`);
@@ -1064,8 +745,6 @@ function App() {
 
       const data = await chatResponse.json();
       
-      // Add structured assistant response with new simplified format
-      // Filter out string "null" values from OpenAI
       const assistantMessage = {
         role: 'assistant',
         correction_es: (data.correction_es && data.correction_es !== 'null') ? data.correction_es : null,
@@ -1074,18 +753,14 @@ function App() {
         needs_correction: !!data.needs_correction
       };
 
-      // Will calculate correct index inside setMessages callback
       let actualAssistantIndex = -1;
       
-      // Pre-cache translations for instant display when bubbles are clicked
       setMessages(prev => {
         const newMessages = [...prev, assistantMessage];
         const actualIndex = newMessages.length - 1;
-        actualAssistantIndex = actualIndex; // Capture for auto-play
+        actualAssistantIndex = actualIndex;
         const userIndex = actualIndex - 1;
-        console.log('📍 Assistant message added at index:', actualIndex);
         
-        // Pre-translate and cache user message
         if (userIndex >= 0 && newMessages[userIndex].role === 'user') {
           const userMessageId = `user-${userIndex}`;
           const userText = newMessages[userIndex].text;
@@ -1096,10 +771,8 @@ function App() {
           });
         }
         
-        // Pre-cache assistant translations if available
         if (data.translation_en) {
           const newTranslations = new Map();
-          // Helper function to extract text from brackets
           const extractFromBrackets = (text) => {
             const match = text.match(/\[(.*?)\]/);
             return match ? match[1] : text.trim();
@@ -1120,7 +793,6 @@ function App() {
             }
           }
           
-          // Update translations state
           if (newTranslations.size > 0) {
             setTranslations(prev => {
               const updated = new Map(prev);
@@ -1133,10 +805,7 @@ function App() {
         return newMessages;
       });
 
-      // Auto-play AI response using primed audio element
-      // Fetch TTS blobs and enqueue for playback
       const partsToPlay = [];
-      // Only add correction if it exists AND is not the string "null"
       if (data.correction_es && data.correction_es !== 'null') {
         partsToPlay.push({ 
           text: data.correction_es, 
@@ -1151,13 +820,10 @@ function App() {
       }
       
       if (partsToPlay.length > 0) {
-        console.log('🔊 Auto-playing AI response with IDs:', partsToPlay.map(p => p.messageId));
-        console.log('🔊 Using assistant index:', actualAssistantIndex);
+        console.log('🔊 Auto-playing AI response');
         
-        // Fetch and cache new TTS (never check cache for new AI responses)
         for (const { text, messageId } of partsToPlay) {
           try {
-            // Always fetch fresh TTS for new AI messages
             const response = await fetch(`${API_BASE}/tts`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -1166,91 +832,71 @@ function App() {
             
             if (response.ok) {
               const blob = await response.blob();
-              ttsCache.set(messageId, blob); // ✅ Cache for future bubble taps
+              ttsCache.set(messageId, blob);
               ttsManager.enqueueBlob(messageId, blob);
-            } else {
-              console.error('TTS fetch failed for', messageId, ':', response.status);
             }
           } catch (e) {
-            console.error('Auto-play fetch error for', messageId, ':', e);
+            console.error('Auto-play fetch error:', e);
           }
         }
       }
 
     } catch (err) {
-      console.error('Full processing error:', err);
+      console.error('Processing error:', err);
       if (err.name === 'AbortError') {
-        console.log('Request was cancelled');
-        return; // Don't show error for cancelled requests
+        console.log('Request cancelled');
+        return;
       }
       setError('Error processing audio: ' + err.message);
     } finally {
       setIsProcessing(false);
-      abortControllerRef.current = null; // Clear the abort controller
+      abortControllerRef.current = null;
     }
   }, [messages, showEnglish]);
 
-  // Translation function
   const translateText = useCallback(async (text) => {
     try {
-      console.log('🔄 Translating text:', text);
       const response = await fetch(`${API_BASE}/api/translate`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ 
-          text: text,
-          from: 'es',
-          to: 'en'
-        }),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, from: 'es', to: 'en' }),
       });
       
       if (response.ok) {
         const data = await response.json();
-        console.log('✅ Translation received:', data.translation);
         return data.translation;
-      } else {
-        console.error('❌ Translation API error:', response.status, response.statusText);
       }
     } catch (error) {
-      console.error('❌ Translation fetch error:', error);
+      console.error('Translation error:', error);
     }
     return null;
   }, []);
 
-  // Speak function for bubble taps - uses primed audio element
   const speak = useCallback(async (text, messageId, event) => {
-    // Prevent event bubbling to avoid conflicts
     if (event) {
       event.preventDefault();
       event.stopPropagation();
     }
     
-    console.log('🔊 Speak requested:', { text: text.substring(0, 30), messageId });
+    console.log('🔊 Speak:', messageId);
     
-    // Mark bubble as clicked to reveal translation
     if (messageId) {
       setClickedBubbles(prev => new Set(prev.add(messageId)));
     }
     
-    // If same message is playing, stop it
     if (ttsManager.stopIfPlaying(messageId)) {
-      console.log('🛑 Stopped currently playing message');
+      console.log('🛑 Stopped playing');
       return;
     }
     
-    // Prime under this gesture if needed (safe - won't interrupt active playback)
     await ttsManager.prime();
     
-    // Check cache first, then fetch if needed
     try {
       const cachedUrl = ttsCache.get(messageId);
       if (cachedUrl) {
-        console.log('🎵 Bubble tap using cached TTS URL:', messageId);
+        console.log('🎵 Using cache:', messageId);
         ttsManager.enqueueBlob(messageId, cachedUrl, true);
       } else {
-        // Fetch, cache, and play
         const response = await fetch(`${API_BASE}/tts`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -1259,19 +905,15 @@ function App() {
         
         if (response.ok) {
           const blob = await response.blob();
-          ttsCache.set(messageId, blob); // ✅ Cache for future taps
+          ttsCache.set(messageId, blob);
           ttsManager.enqueueBlob(messageId, blob, false);
-        } else {
-          console.error('TTS fetch failed:', response.status);
         }
       }
     } catch (err) {
-      console.error('TTS fetch error:', err);
+      console.error('TTS error:', err);
     }
     
-    // Fetch translation if not cached (fallback)
     if (messageId && !translations.has(messageId)) {
-      console.log('⚠️ Translation not cached - fetching');
       const translation = await translateText(text);
       if (translation) {
         setTranslations(prev => new Map(prev.set(messageId, translation)));
@@ -1282,331 +924,393 @@ function App() {
   const clearConversation = useCallback(() => {
     setMessages([]);
     setError('');
-    setTranslations(new Map()); // Clear all translations
-    setClickedBubbles(new Set()); // Clear clicked bubbles state
-    ttsCache.clear(); // ✅ Clear TTS cache
+    setTranslations(new Map());
+    setClickedBubbles(new Set());
+    ttsCache.clear();
   }, []);
 
-  // iOS first-run screen handler
   const handleEnableAudio = useCallback(async () => {
-    console.log('📱 iOS first-run: Enabling audio...');
-    // Prime audio element
+    console.log('📱 iOS first-run: Enabling audio');
     await ttsManager.prime();
-    // Request mic permission
     await requestMicPermissionOnce();
-    // Mark as seen
     localStorage.setItem('hasSeenFirstRunScreen', 'true');
     setShowFirstRunScreen(false);
     console.log('✅ iOS first-run complete');
   }, [requestMicPermissionOnce]);
 
   return (
-    <div className="h-full w-full bg-gray-50 flex flex-col overflow-hidden" style={{ height: '100vh', width: '100vw' }}>
-      {/* iOS First-Run Screen */}
+    <div style={{
+      minHeight: '100vh',
+      background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+      display: 'flex',
+      flexDirection: 'column',
+      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
+      position: 'relative',
+      paddingTop: 'env(safe-area-inset-top)',
+      paddingBottom: 'env(safe-area-inset-bottom)',
+    }}>
+      
+      {/* iOS First Run Screen */}
       {showFirstRunScreen && (
-        <div 
-          style={{
-            position: 'fixed',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            backgroundColor: 'rgba(0, 0, 0, 0.9)',
-            zIndex: 9999,
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            padding: '32px'
-          }}
-        >
-          <div style={{ textAlign: 'center', color: 'white' }}>
-            <div style={{ fontSize: '64px', marginBottom: '24px' }}>🎙️</div>
-            <h2 style={{ fontSize: '28px', fontWeight: 'bold', marginBottom: '16px' }}>
+        <div style={{
+          position: 'fixed',
+          inset: 0,
+          backgroundColor: 'rgba(0,0,0,0.95)',
+          zIndex: 9999,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: '32px',
+        }}>
+          <div style={{
+            backgroundColor: 'white',
+            borderRadius: '24px',
+            padding: '40px 32px',
+            maxWidth: '400px',
+            textAlign: 'center',
+            boxShadow: '0 20px 60px rgba(0,0,0,0.3)',
+          }}>
+            <div style={{ fontSize: '64px', marginBottom: '24px' }}>🎤</div>
+            <h2 style={{ fontSize: '24px', fontWeight: '700', marginBottom: '16px', color: '#1f2937' }}>
               Enable Audio
             </h2>
-            <p style={{ fontSize: '16px', marginBottom: '32px', opacity: 0.9, maxWidth: '320px' }}>
-              To use voice features, we need access to your microphone.
+            <p style={{ fontSize: '16px', lineHeight: '1.6', color: '#6b7280', marginBottom: '32px' }}>
+              To use voice features, we need permission to access your microphone and play audio.
             </p>
             <button
               onClick={handleEnableAudio}
               style={{
-                backgroundColor: '#3b82f6',
-                color: 'white',
+                width: '100%',
+                padding: '16px 32px',
                 fontSize: '18px',
-                fontWeight: 'bold',
-                padding: '16px 48px',
-                borderRadius: '12px',
-                border: 'none',
-                cursor: 'pointer',
-                boxShadow: '0 4px 12px rgba(59, 130, 246, 0.5)'
-              }}
-            >
-              Enable Audio & Microphone
-            </button>
-          </div>
-        </div>
-      )}
-      
-      {/* Header - Fixed Height */}
-      <header className="bg-white shadow-sm border-b px-4 py-3 shrink-0">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 
-              className="text-xl font-semibold text-gray-800"
-              style={{ 
-                userSelect: 'text', 
-                WebkitUserSelect: 'text',
-                MozUserSelect: 'text',
-                msUserSelect: 'text'
-              }}
-            >
-              🇲🇽 Práctica de Español
-            </h1>
-          </div>
-          <div className="flex items-center gap-4">
-            {/* Microphone Status Indicator */}
-            {isListening && (
-              <div className="flex items-center gap-2 text-xs" style={{
-                padding: '4px 8px',
-                borderRadius: '12px',
-                backgroundColor: isRecording ? 'rgba(239, 68, 68, 0.1)' : 'rgba(34, 197, 94, 0.1)',
-                border: isRecording ? '1px solid rgba(239, 68, 68, 0.3)' : '1px solid rgba(34, 197, 94, 0.3)',
-                color: isRecording ? '#dc2626' : '#16a34a',
                 fontWeight: '600',
-                animation: isRecording ? 'pulse 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite' : 'none'
-              }}>
-                <span style={{ fontSize: '14px' }}>
-                  {isRecording ? '🔴' : '🎤'}
-                </span>
-                <span>
-                  {isRecording ? 'Recording' : 'Listening'}
-                </span>
-              </div>
-            )}
-            {showInstallPrompt && (
-              <button
-                onClick={handleInstallClick}
-                className="text-xs px-2 py-1 bg-blue-100 text-blue-600 rounded hover:bg-blue-200 transition-colors font-medium"
-              >
-                📱 Install App
-              </button>
-            )}
-            <label className="flex items-center gap-2 text-xs text-gray-600 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={showEnglish}
-                onChange={(e) => setShowEnglish(e.target.checked)}
-                className="h-3 w-3 rounded"
-              />
-              <span>English</span>
-            </label>
-            <button
-              onClick={clearConversation}
-              className="text-xs px-2 py-1 bg-red-100 text-red-600 rounded hover:bg-red-200 transition-colors"
+                color: 'white',
+                backgroundColor: '#667eea',
+                border: 'none',
+                borderRadius: '16px',
+                cursor: 'pointer',
+                transition: 'all 0.2s',
+              }}
+              onMouseEnter={(e) => {
+                e.target.style.backgroundColor = '#5568d3';
+                e.target.style.transform = 'scale(1.02)';
+              }}
+              onMouseLeave={(e) => {
+                e.target.style.backgroundColor = '#667eea';
+                e.target.style.transform = 'scale(1)';
+              }}
             >
-              Clear
+              Enable Audio
             </button>
-          </div>
-        </div>
-      </header>
-
-      {/* Chat Messages Container - Scrollable, Takes Remaining Space */}
-      <div 
-        className="flex-1 min-h-0 overflow-y-auto"
-        style={{
-          background: 'linear-gradient(to bottom, #eff6ff, #ffffff, #eff6ff)',
-          padding: '24px 0'
-        }}
-      >
-        <div style={{ maxWidth: '1024px', margin: '0 auto', height: '100%' }}>
-          <div style={{ display: 'flex', flexDirection: 'column' }}>
-            {messages.map((message, index) => {
-              
-              if (message.role === 'user') {
-                const messageId = `user-${index}`;
-                return (
-                  <MessageBubble 
-                    key={messageId} 
-                    text={message.text} 
-                    isUser={true}
-                    onSpeak={speak}
-                    messageId={messageId}
-                    translation={translations.get(messageId)}
-                    hasBeenClicked={clickedBubbles.has(messageId)} 
-                  />
-                );
-              }
-
-              return (
-                <div key={`assistant-${index}`} className="space-y-2">
-                  {/* Show correction first if it exists and is not string "null" */}
-                  {message.correction_es && message.correction_es !== 'null' && (
-                    <MessageBubble 
-                      text={message.correction_es} 
-                      isUser={false}
-                      label="Corrección"
-                      onSpeak={speak}
-                      messageId={`assistant-${index}-correction`}
-                      translation={translations.get(`assistant-${index}-correction`)}
-                      hasBeenClicked={clickedBubbles.has(`assistant-${index}-correction`)} 
-                    />
-                  )}
-                  {/* Main reply (always shown) */}
-                  {message.reply_es && (
-                    <MessageBubble 
-                      text={message.reply_es} 
-                      isUser={false}
-                      onSpeak={speak}
-                      messageId={`assistant-${index}-reply`}
-                      translation={translations.get(`assistant-${index}-reply`)}
-                      hasBeenClicked={clickedBubbles.has(`assistant-${index}-reply`)} 
-                    />
-                  )}
-                  {message.question_es && (
-                    <MessageBubble 
-                      text={message.question_es} 
-                      isUser={false}
-                      onSpeak={speak}
-                      messageId={`assistant-${index}-question`}
-                      translation={translations.get(`assistant-${index}-question`)}
-                      hasBeenClicked={clickedBubbles.has(`assistant-${index}-question`)} 
-                    />
-                  )}
-                  {showEnglish && message.translation_en && (
-                    <MessageBubble 
-                      text={message.translation_en} 
-                      isUser={false}
-                      label="English"
-                      onSpeak={async (text) => await speakServerTTS(text, API_BASE)} 
-                    />
-                  )}
-                </div>
-              );
-            })}
-          </div>
-          {/* Invisible element to scroll to */}
-          <div ref={messagesEndRef} className="h-4" />
-        </div>
-      </div>
-
-      {/* Error Bar - Fixed Height (when visible) */}
-      {error && (
-        <div className="bg-white border-t px-4 py-2 shrink-0">
-          <div className="max-w-4xl mx-auto">
-            <p className="text-sm text-red-600">{error}</p>
           </div>
         </div>
       )}
 
-      {/* Bottom Microphone Button - Fixed Height */}
-      <div className="bg-white border-t px-4 pt-12 pb-6 shrink-0">
-        <div className="max-w-4xl mx-auto text-center">
+      {/* Header */}
+      <div style={{
+        background: 'rgba(255, 255, 255, 0.95)',
+        backdropFilter: 'blur(10px)',
+        padding: '20px',
+        boxShadow: '0 2px 20px rgba(0,0,0,0.1)',
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        position: 'sticky',
+        top: 0,
+        zIndex: 100,
+      }}>
+        <h1 style={{
+          fontSize: '24px',
+          fontWeight: '700',
+          color: '#667eea',
+          margin: 0,
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px',
+        }}>
+          🇪🇸 Spanish Tutor
+        </h1>
+        
+        <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
           <button
-            onPointerDown={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              console.log('👆 PointerDown event fired');
-              // Add holding-mic class for pointer-events isolation
-              document.body.classList.add('holding-mic');
-              if (!isProcessing && !isRequestingPermission) {
-                console.log('👆 PointerDown conditions met, calling handleButtonPress');
-                handleButtonPress(e);
-              } else {
-                console.log('👆 PointerDown blocked:', { isProcessing, isRequestingPermission });
-              }
-            }}
-            onPointerUp={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              console.log('👆 PointerUp event fired');
-              // Remove holding-mic class
-              document.body.classList.remove('holding-mic');
-              if (!isRequestingPermission) {
-                console.log('👆 PointerUp calling stopRecording');
-                stopRecording(e);
-              } else {
-                console.log('👆 PointerUp blocked:', { isRequestingPermission });
-              }
-            }}
-            onPointerCancel={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              console.log('👆 PointerCancel event fired');
-              // Remove holding-mic class
-              document.body.classList.remove('holding-mic');
-              if (!isRequestingPermission) {
-                stopRecording(e);
-              }
-            }}
-            onClick={(e) => {
-              if (isProcessing) {
-                cancelProcessing();
-              }
-            }}
-            className="rounded-full text-6xl transition-all duration-200 transform shadow-xl active:scale-95 text-white font-medium cursor-pointer"
+            onClick={() => setShowEnglish(!showEnglish)}
             style={{
-              width: '360px',
-              height: '60px',
-              minWidth: '360px',
-              minHeight: '60px',
-              marginTop: '10px',
-              backgroundColor: isRequestingPermission 
-                ? '#9ca3af' 
-                : isProcessing 
-                  ? '#ef4444' 
-                  : '#3b82f6',
-              border: 'none',
-              outline: 'none',
-              transform: isRecording ? 'scale(1.05)' : 'scale(1)',
-              animation: isRecording ? 'pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite' : 'none',
-              boxShadow: isRecording 
-                ? '0 8px 20px rgba(59, 130, 246, 0.5)' 
-                : isProcessing
-                  ? '0 8px 20px rgba(239, 68, 68, 0.3)'
-                  : '0 4px 12px rgba(59, 130, 246, 0.3)',
-              userSelect: 'none',
-              WebkitUserSelect: 'none',
-              WebkitTouchCallout: 'none',
-              WebkitTapHighlightColor: 'transparent',
-              touchAction: 'none',
-              WebkitUserSelect: 'none',
-              WebkitTouchCallout: 'none',
-              WebkitTapHighlightColor: 'transparent',
-              opacity: isRequestingPermission ? 0.6 : 1
+              padding: '10px 16px',
+              fontSize: '14px',
+              fontWeight: '600',
+              color: showEnglish ? 'white' : '#667eea',
+              backgroundColor: showEnglish ? '#667eea' : 'transparent',
+              border: '2px solid #667eea',
+              borderRadius: '12px',
+              cursor: 'pointer',
+              transition: 'all 0.2s',
             }}
           >
-            <span style={{ userSelect: 'none', WebkitUserSelect: 'none', pointerEvents: 'none' }}>
-              {isRequestingPermission ? '🔐' : isProcessing ? '✖️' : isRecording ? '⏹️' : '🎙️'}
-            </span>
+            {showEnglish ? '🇺🇸 EN' : '🇪🇸 ES'}
           </button>
           
-          <p 
-            className="mt-2 text-sm text-gray-600"
-            style={{ 
-              userSelect: 'text', 
-              WebkitUserSelect: 'text',
-              MozUserSelect: 'text',
-              msUserSelect: 'text'
+          <button
+            onClick={clearConversation}
+            style={{
+              padding: '10px 16px',
+              fontSize: '14px',
+              fontWeight: '600',
+              color: '#ef4444',
+              backgroundColor: 'transparent',
+              border: '2px solid #ef4444',
+              borderRadius: '12px',
+              cursor: 'pointer',
+              transition: 'all 0.2s',
             }}
           >
-            {isRequestingPermission
-              ? 'Requesting microphone permission...'
-              : isProcessing 
-                ? 'Processing... (click to cancel)' 
-                : isRecording 
-                  ? 'Recording... (release to send)'
-                  : micPermissionGranted 
-                    ? 'Hold to speak'
-                    : 'Press to request microphone access'
-            }
-            <br />
-            <small style={{ fontSize: '10px', opacity: 0.7 }}>
-              Debug: perm={micPermissionGranted.toString()} | rec={isRecording.toString()} | proc={isProcessing.toString()} | req={isRequestingPermission.toString()}
-            </small>
-          </p>
+            🗑️ Clear
+          </button>
         </div>
       </div>
+
+      {/* Messages */}
+      <div style={{
+        flex: 1,
+        overflowY: 'auto',
+        padding: '24px 0',
+        display: 'flex',
+        flexDirection: 'column',
+      }}>
+        {messages.map((msg, index) => {
+          if (msg.role === 'user') {
+            const messageId = `user-${index}`;
+            const translation = translations.get(messageId);
+            const hasBeenClicked = clickedBubbles.has(messageId);
+            
+            return (
+              <MessageBubble
+                key={index}
+                text={msg.text}
+                isUser={true}
+                onSpeak={speak}
+                messageId={messageId}
+                translation={translation}
+                hasBeenClicked={hasBeenClicked}
+              />
+            );
+          } else {
+            const correctionId = `assistant-${index}-correction`;
+            const replyId = `assistant-${index}-reply`;
+            const correctionTranslation = translations.get(correctionId);
+            const replyTranslation = translations.get(replyId);
+            const correctionClicked = clickedBubbles.has(correctionId);
+            const replyClicked = clickedBubbles.has(replyId);
+            
+            return (
+              <div key={index}>
+                {msg.correction_es && (
+                  <MessageBubble
+                    text={msg.correction_es}
+                    isUser={false}
+                    label="Correction"
+                    onSpeak={speak}
+                    messageId={correctionId}
+                    translation={correctionTranslation}
+                    hasBeenClicked={correctionClicked}
+                  />
+                )}
+                {msg.reply_es && (
+                  <MessageBubble
+                    text={msg.reply_es}
+                    isUser={false}
+                    label={msg.correction_es ? "Reply" : null}
+                    onSpeak={speak}
+                    messageId={replyId}
+                    translation={replyTranslation}
+                    hasBeenClicked={replyClicked}
+                  />
+                )}
+              </div>
+            );
+          }
+        })}
+        <div ref={messagesEndRef} />
+      </div>
+
+      {/* Error Display */}
+      {error && (
+        <div style={{
+          margin: '0 20px 16px 20px',
+          padding: '16px',
+          backgroundColor: '#fee2e2',
+          border: '2px solid #ef4444',
+          borderRadius: '12px',
+          color: '#991b1b',
+          fontSize: '14px',
+          fontWeight: '600',
+          textAlign: 'center',
+        }}>
+          {error}
+        </div>
+      )}
+
+      {/* Processing Indicator */}
+      {isProcessing && (
+        <div style={{
+          margin: '0 20px 16px 20px',
+          padding: '16px',
+          backgroundColor: 'rgba(255, 255, 255, 0.95)',
+          borderRadius: '12px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <div style={{
+              width: '24px',
+              height: '24px',
+              border: '3px solid #667eea',
+              borderTopColor: 'transparent',
+              borderRadius: '50%',
+              animation: 'spin 1s linear infinite',
+            }} />
+            <span style={{ fontSize: '16px', fontWeight: '600', color: '#667eea' }}>
+              Processing...
+            </span>
+          </div>
+          <button
+            onClick={cancelProcessing}
+            style={{
+              padding: '8px 16px',
+              fontSize: '14px',
+              fontWeight: '600',
+              color: '#ef4444',
+              backgroundColor: 'transparent',
+              border: '2px solid #ef4444',
+              borderRadius: '8px',
+              cursor: 'pointer',
+            }}
+          >
+            Cancel
+          </button>
+        </div>
+      )}
+
+      {/* Record Button */}
+      <div style={{
+        padding: '24px',
+        background: 'rgba(255, 255, 255, 0.95)',
+        backdropFilter: 'blur(10px)',
+        borderTop: '1px solid rgba(0,0,0,0.1)',
+        display: 'flex',
+        justifyContent: 'center',
+        alignItems: 'center',
+      }}>
+        <div
+          onTouchStart={handleButtonPress}
+          onTouchEnd={stopRecording}
+          onMouseDown={handleButtonPress}
+          onMouseUp={stopRecording}
+          onMouseLeave={(e) => {
+            if (isRecording) {
+              stopRecording(e);
+            }
+          }}
+          style={{
+            width: '120px',
+            height: '120px',
+            borderRadius: '50%',
+            backgroundColor: isRecording ? '#ef4444' : '#667eea',
+            display: 'flex',
+            flexDirection: 'column',
+            justifyContent: 'center',
+            alignItems: 'center',
+            cursor: 'pointer',
+            transition: 'all 0.2s ease',
+            boxShadow: isRecording 
+              ? '0 0 0 8px rgba(239, 68, 68, 0.2), 0 8px 24px rgba(239, 68, 68, 0.3)'
+              : '0 8px 24px rgba(102, 126, 234, 0.3)',
+            transform: isRecording ? 'scale(1.1)' : 'scale(1)',
+            userSelect: 'none',
+            WebkitUserSelect: 'none',
+            WebkitTouchCallout: 'none',
+          }}
+        >
+          <span style={{ fontSize: '48px', marginBottom: '4px' }}>
+            {isRecording ? '⏸️' : '🎤'}
+          </span>
+          <span style={{
+            fontSize: '14px',
+            fontWeight: '700',
+            color: 'white',
+            textTransform: 'uppercase',
+            letterSpacing: '1px',
+          }}>
+            {isRecording ? 'Recording' : 'Hold to Talk'}
+          </span>
+        </div>
+      </div>
+
+      {/* Install Prompt */}
+      {showInstallPrompt && (
+        <div style={{
+          position: 'fixed',
+          bottom: '20px',
+          left: '20px',
+          right: '20px',
+          backgroundColor: 'white',
+          borderRadius: '16px',
+          padding: '20px',
+          boxShadow: '0 8px 32px rgba(0,0,0,0.2)',
+          zIndex: 1000,
+        }}>
+          <p style={{ margin: '0 0 16px 0', fontSize: '16px', fontWeight: '600', color: '#1f2937' }}>
+            Install Spanish Tutor for offline access
+          </p>
+          <div style={{ display: 'flex', gap: '12px' }}>
+            <button
+              onClick={handleInstallClick}
+              style={{
+                flex: 1,
+                padding: '12px',
+                fontSize: '16px',
+                fontWeight: '600',
+                color: 'white',
+                backgroundColor: '#667eea',
+                border: 'none',
+                borderRadius: '12px',
+                cursor: 'pointer',
+              }}
+            >
+              Install
+            </button>
+            <button
+              onClick={() => setShowInstallPrompt(false)}
+              style={{
+                flex: 1,
+                padding: '12px',
+                fontSize: '16px',
+                fontWeight: '600',
+                color: '#6b7280',
+                backgroundColor: 'transparent',
+                border: '2px solid #e5e7eb',
+                borderRadius: '12px',
+                cursor: 'pointer',
+              }}
+            >
+              Later
+            </button>
+          </div>
+        </div>
+      )}
+
+      <style>
+        {`
+          @keyframes spin {
+            to { transform: rotate(360deg); }
+          }
+          
+          * {
+            -webkit-tap-highlight-color: transparent;
+          }
+        `}
+      </style>
     </div>
   );
 }
