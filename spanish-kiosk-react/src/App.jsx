@@ -518,6 +518,17 @@ function App() {
   // Recover persistent stream if it dies
   const recoverPersistentStream = useCallback(async () => {
     console.log('🔄 Recovering persistent stream...');
+    
+    // Stop old stream tracks first to prevent orphaned streams
+    if (persistentStreamRef.current) {
+      console.log('🛑 Stopping old stream tracks before recovery');
+      persistentStreamRef.current.getTracks().forEach(track => {
+        track.stop();
+        console.log('🛑 Stopped orphaned track:', track.id);
+      });
+      persistentStreamRef.current = null;
+    }
+    
     try {
       const constraints = {
         audio: {
@@ -587,12 +598,23 @@ function App() {
       // Wait a moment for tracks to fully stabilize
       await new Promise(resolve => setTimeout(resolve, 150));
       
+      // Verify stream is still healthy after resume
+      const healthyTracks = persistentStreamRef.current.getAudioTracks();
+      const isHealthy = healthyTracks.length > 0 && healthyTracks.every(t => t.readyState === 'live');
+      
+      if (!isHealthy) {
+        console.warn('⚠️ Stream unhealthy after resume - iOS may have killed it');
+        micTracksReadyRef.current = false;
+        persistentStreamRef.current = null;
+        return;
+      }
+      
       micTracksReadyRef.current = true; // Mark as ready
-      console.log('✅ Microphone fully ready');
+      console.log('✅ Microphone fully ready and healthy');
     } catch (err) {
       console.warn('⚠️ Could not resume mic:', err);
-      // Still mark as ready to allow retry
-      micTracksReadyRef.current = true;
+      micTracksReadyRef.current = false;
+      persistentStreamRef.current = null;
     }
   }, []);
 
