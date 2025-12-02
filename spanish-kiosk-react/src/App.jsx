@@ -380,6 +380,7 @@ function App() {
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
   const persistentStreamRef = useRef(null); // 🎤 Persistent mic stream (stays alive entire session)
+  const micTracksReadyRef = useRef(false); // 🎯 Track if mic is ready for recording
   const messagesEndRef = useRef(null);
   const abortControllerRef = useRef(null); // For canceling requests
   const recordingStartTimeRef = useRef(null); // Track recording duration
@@ -534,6 +535,7 @@ function App() {
       
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
       persistentStreamRef.current = stream;
+      micTracksReadyRef.current = true; // Mark as ready
       setIsListening(true);
       console.log('✅ Persistent stream recovered');
       return true;
@@ -550,6 +552,9 @@ function App() {
   // Suspend microphone during TTS playback (prevents iOS audio ducking)
   const suspendMicrophone = useCallback(async () => {
     if (!persistentStreamRef.current) return;
+    
+    micTracksReadyRef.current = false; // Mark as not ready
+    console.log('🔇 Suspending microphone...');
     
     try {
       const tracks = persistentStreamRef.current.getAudioTracks();
@@ -568,6 +573,8 @@ function App() {
   const resumeMicrophone = useCallback(async () => {
     if (!persistentStreamRef.current) return;
     
+    console.log('🔊 Resuming microphone...');
+    
     try {
       const tracks = persistentStreamRef.current.getAudioTracks();
       tracks.forEach(track => {
@@ -576,8 +583,16 @@ function App() {
           console.log('🔊 Mic track resumed:', track.id);
         }
       });
+      
+      // Wait a moment for tracks to fully stabilize
+      await new Promise(resolve => setTimeout(resolve, 150));
+      
+      micTracksReadyRef.current = true; // Mark as ready
+      console.log('✅ Microphone fully ready');
     } catch (err) {
       console.warn('⚠️ Could not resume mic:', err);
+      // Still mark as ready to allow retry
+      micTracksReadyRef.current = true;
     }
   }, []);
 
@@ -619,6 +634,7 @@ function App() {
       
       // Store as PERSISTENT stream (never stopped until session ends)
       persistentStreamRef.current = stream;
+      micTracksReadyRef.current = true; // Mark as ready initially
       
       // Store permission in localStorage
       localStorage.setItem('micPermissionGranted', 'true');
@@ -689,21 +705,37 @@ function App() {
       // Use persistent stream for MediaRecorder
       const stream = persistentStreamRef.current;
 
-      // Ensure mic tracks are enabled before recording (may be disabled from TTS suspend)
+      // Poll for mic tracks to be ready (wait for resume to complete)
+      console.log('🔍 Checking if mic tracks are ready...');
+      const startWait = Date.now();
+      const maxWaitTime = 2000; // 2 second timeout
+      
+      while (!micTracksReadyRef.current) {
+        if (Date.now() - startWait > maxWaitTime) {
+          console.log('⏱️ Timeout waiting for tracks, forcing enable...');
+          break;
+        }
+        console.log('⏳ Waiting for mic tracks to be ready...');
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+      
+      // Double-check tracks are actually enabled
       const tracks = stream.getAudioTracks();
       const allEnabled = tracks.every(t => t.enabled);
       if (!allEnabled) {
-        console.log('⚠️ Tracks were disabled, enabling now...');
+        console.log('⚠️ Tracks still disabled after wait, enabling now...');
         tracks.forEach(t => {
           t.enabled = true;
-          console.log('✅ Enabled track:', t.id);
+          console.log('✅ Force-enabled track:', t.id);
         });
-        // Small delay for tracks to fully activate
+        // Small delay for tracks to activate
         await new Promise(resolve => setTimeout(resolve, 100));
-        console.log('✅ Tracks ready for recording');
-      } else {
-        console.log('✅ All tracks already enabled');
+        micTracksReadyRef.current = true; // Mark as ready
       }
+      
+      console.log('✅ Mic tracks confirmed ready for recording');
+      const waitDuration = Date.now() - startWait;
+      console.log(`⏱️ Ready check took ${waitDuration}ms`);
 
       // Force MP4 for iOS (best compatibility with OpenAI Whisper)
       // For other platforms, try compatible formats
