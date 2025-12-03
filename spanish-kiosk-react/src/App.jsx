@@ -1019,7 +1019,7 @@ function App() {
         alignItems: 'center',
         flexShrink: 0,
         zIndex: 100,
-      }>
+      }}>
         <h1 style={{
           fontSize: '24px',
           fontWeight: '700',
