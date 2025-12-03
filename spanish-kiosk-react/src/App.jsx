@@ -233,7 +233,7 @@ const ttsManager = new TTSManager();
 const isiOS = typeof navigator !== 'undefined' && /iP(hone|ad|od)/.test(navigator.userAgent);
 
 // UI Components  
-function MessageBubble({ text, isUser, label, onSpeak, messageId, translation, hasBeenClicked }) {
+function MessageBubble({ text, isUser, label, onSpeak, messageId, translation, hasBeenClicked, showEnglish }) {
   if (!text) return null;
   
   const bubbleStyle = isUser 
@@ -297,20 +297,20 @@ function MessageBubble({ text, isUser, label, onSpeak, messageId, translation, h
             }
           }}
         >
-          {text}
+          <div>{text}</div>
+          {translation && hasBeenClicked && showEnglish && (
+            <div style={{
+              fontSize: '14px',
+              color: isUser ? 'rgba(255,255,255,0.8)' : '#6b7280',
+              marginTop: '12px',
+              paddingTop: '12px',
+              borderTop: isUser ? '1px solid rgba(255,255,255,0.2)' : '1px solid #e5e7eb',
+              fontStyle: 'italic',
+            }}>
+              {translation}
+            </div>
+          )}
         </div>
-        
-        {translation && hasBeenClicked && (
-          <div style={{
-            fontSize: '14px',
-            color: '#6b7280',
-            marginTop: '8px',
-            fontStyle: 'italic',
-            paddingLeft: '12px',
-          }}>
-            {translation}
-          </div>
-        )}
       </div>
     </div>
   );
@@ -1091,6 +1091,7 @@ function App() {
                 messageId={messageId}
                 translation={translation}
                 hasBeenClicked={hasBeenClicked}
+                showEnglish={showEnglish}
               />
             );
           } else {
@@ -1112,6 +1113,7 @@ function App() {
                     messageId={correctionId}
                     translation={correctionTranslation}
                     hasBeenClicked={correctionClicked}
+                    showEnglish={showEnglish}
                   />
                 )}
                 {msg.reply_es && (
@@ -1123,6 +1125,7 @@ function App() {
                     messageId={replyId}
                     translation={replyTranslation}
                     hasBeenClicked={replyClicked}
+                    showEnglish={showEnglish}
                   />
                 )}
               </div>
@@ -1229,10 +1232,20 @@ function App() {
             transform: isRecording ? 'scale(1.1)' : 'scale(1)',
             userSelect: 'none',
             WebkitUserSelect: 'none',
+            MozUserSelect: 'none',
+            msUserSelect: 'none',
             WebkitTouchCallout: 'none',
+            WebkitUserDrag: 'none',
+            WebkitTapHighlightColor: 'transparent',
           }}
         >
-          <span style={{ fontSize: '48px', marginBottom: '4px' }}>
+          <span style={{ 
+            fontSize: '48px', 
+            marginBottom: '4px',
+            userSelect: 'none',
+            WebkitUserSelect: 'none',
+            pointerEvents: 'none',
+          }}>
             {isRecording ? '⏸️' : '🎤'}
           </span>
           <span style={{
@@ -1241,6 +1254,9 @@ function App() {
             color: 'white',
             textTransform: 'uppercase',
             letterSpacing: '1px',
+            userSelect: 'none',
+            WebkitUserSelect: 'none',
+            pointerEvents: 'none',
           }}>
             {isRecording ? 'Recording' : 'Hold to Talk'}
           </span>
