@@ -940,14 +940,14 @@ function App() {
 
   return (
     <div style={{
-      minHeight: '100vh',
+      height: '100vh',
+      height: '100dvh',
       background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
       display: 'flex',
       flexDirection: 'column',
       fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
       position: 'relative',
-      paddingTop: 'env(safe-area-inset-top)',
-      paddingBottom: 'env(safe-area-inset-bottom)',
+      overflow: 'hidden',
     }}>
       
       {/* iOS First Run Screen */}
@@ -1072,9 +1072,12 @@ function App() {
       <div style={{
         flex: 1,
         overflowY: 'auto',
+        overflowX: 'hidden',
         padding: '24px 0',
         display: 'flex',
         flexDirection: 'column',
+        backgroundColor: '#f3f4f6',
+        WebkitOverflowScrolling: 'touch',
       }}>
         {messages.map((msg, index) => {
           if (msg.role === 'user') {
