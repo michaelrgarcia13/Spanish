@@ -948,6 +948,8 @@ function App() {
       fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
       position: 'relative',
       overflow: 'hidden',
+      paddingTop: 'env(safe-area-inset-top)',
+      paddingBottom: 'env(safe-area-inset-bottom)',
     }}>
       
       {/* iOS First Run Screen */}
@@ -1010,18 +1012,14 @@ function App() {
       <div style={{
         background: 'rgba(255, 255, 255, 0.95)',
         backdropFilter: 'blur(10px)',
-        paddingTop: 'max(20px, env(safe-area-inset-top))',
-        paddingBottom: '20px',
-        paddingLeft: '20px',
-        paddingRight: '20px',
+        padding: '20px',
         boxShadow: '0 2px 20px rgba(0,0,0,0.1)',
         display: 'flex',
         justifyContent: 'space-between',
         alignItems: 'center',
-        position: 'sticky',
-        top: 0,
+        flexShrink: 0,
         zIndex: 100,
-      }}>
+      }>
         <h1 style={{
           fontSize: '24px',
           fontWeight: '700',
@@ -1219,6 +1217,7 @@ function App() {
         display: 'flex',
         justifyContent: 'center',
         alignItems: 'center',
+        flexShrink: 0,
       }}>
         <div
           onTouchStart={handleButtonPress}
