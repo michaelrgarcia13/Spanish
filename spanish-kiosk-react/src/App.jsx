@@ -1010,7 +1010,10 @@ function App() {
       <div style={{
         background: 'rgba(255, 255, 255, 0.95)',
         backdropFilter: 'blur(10px)',
-        padding: '20px',
+        paddingTop: 'max(20px, env(safe-area-inset-top))',
+        paddingBottom: '20px',
+        paddingLeft: '20px',
+        paddingRight: '20px',
         boxShadow: '0 2px 20px rgba(0,0,0,0.1)',
         display: 'flex',
         justifyContent: 'space-between',
@@ -1141,7 +1144,10 @@ function App() {
       {/* Error Display */}
       {error && (
         <div style={{
-          margin: '0 20px 16px 20px',
+          position: 'fixed',
+          bottom: '180px',
+          left: '20px',
+          right: '20px',
           padding: '16px',
           backgroundColor: '#fee2e2',
           border: '2px solid #ef4444',
@@ -1150,6 +1156,8 @@ function App() {
           fontSize: '14px',
           fontWeight: '600',
           textAlign: 'center',
+          boxShadow: '0 8px 24px rgba(0,0,0,0.2)',
+          zIndex: 200,
         }}>
           {error}
         </div>
@@ -1158,14 +1166,18 @@ function App() {
       {/* Processing Indicator */}
       {isProcessing && (
         <div style={{
-          margin: '0 20px 16px 20px',
+          position: 'fixed',
+          bottom: '180px',
+          left: '20px',
+          right: '20px',
           padding: '16px',
-          backgroundColor: 'rgba(255, 255, 255, 0.95)',
+          backgroundColor: 'rgba(255, 255, 255, 0.98)',
           borderRadius: '12px',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
-          boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
+          boxShadow: '0 8px 24px rgba(0,0,0,0.2)',
+          zIndex: 200,
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
             <div style={{
@@ -1219,8 +1231,8 @@ function App() {
             }
           }}
           style={{
-            width: '120px',
-            height: '120px',
+            width: '140px',
+            height: '140px',
             borderRadius: '50%',
             backgroundColor: isRecording ? '#ef4444' : '#667eea',
             display: 'flex',
@@ -1240,26 +1252,30 @@ function App() {
             WebkitTouchCallout: 'none',
             WebkitUserDrag: 'none',
             WebkitTapHighlightColor: 'transparent',
+            padding: '20px',
           }}
         >
           <span style={{ 
-            fontSize: '48px', 
-            marginBottom: '4px',
+            fontSize: '44px', 
+            marginBottom: '6px',
             userSelect: 'none',
             WebkitUserSelect: 'none',
             pointerEvents: 'none',
+            lineHeight: '1',
           }}>
             {isRecording ? '⏸️' : '🎤'}
           </span>
           <span style={{
-            fontSize: '14px',
+            fontSize: '11px',
             fontWeight: '700',
             color: 'white',
             textTransform: 'uppercase',
-            letterSpacing: '1px',
+            letterSpacing: '0.5px',
             userSelect: 'none',
             WebkitUserSelect: 'none',
             pointerEvents: 'none',
+            lineHeight: '1.2',
+            textAlign: 'center',
           }}>
             {isRecording ? 'Recording' : 'Hold to Talk'}
           </span>
