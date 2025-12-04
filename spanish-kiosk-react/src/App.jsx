@@ -392,6 +392,7 @@ function App() {
   
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isCleaningUp, setIsCleaningUp] = useState(false);
   const [error, setError] = useState('');
   const [showInstallPrompt, setShowInstallPrompt] = useState(false);
   const [deferredPrompt, setDeferredPrompt] = useState(null);
@@ -565,8 +566,8 @@ function App() {
       e.stopPropagation();
     }
 
-    if (isRecording || isProcessing || isRequestingPermission) {
-      console.log('🎤 Busy - ignoring');
+    if (isRecording || isProcessing || isRequestingPermission || isCleaningUp) {
+      console.log('🎤 Busy - ignoring (isCleaningUp:', isCleaningUp, ')');
       return;
     }
 
@@ -636,6 +637,7 @@ function App() {
 
       mediaRecorder.onstop = async () => {
         console.log('MediaRecorder stopped');
+        setIsCleaningUp(true);
         
         // Stop stream immediately
         if (currentStreamRef.current) {
@@ -646,11 +648,7 @@ function App() {
           currentStreamRef.current = null;
         }
         
-        // Cool-down period to let iOS AVFoundation fully tear down encoder
-        // This prevents encoder state corruption on subsequent recordings
-        await new Promise(resolve => setTimeout(resolve, 200));
-        console.log('⏱️ Encoder cool-down complete');
-        
+        // Process audio FIRST before cooldown
         if (audioChunksRef.current.length > 0) {
           const audioBlob = new Blob(audioChunksRef.current, { type: mediaRecorder.mimeType || mimeType });
           console.log('Audio blob:', audioBlob.size, 'bytes');
@@ -662,6 +660,12 @@ function App() {
           setError('No audio recorded. Try speaking closer to the microphone.');
           mediaRecorderRef.current = null;
         }
+        
+        // Cool-down period AFTER processing to let iOS AVFoundation fully tear down encoder
+        // This prevents encoder state corruption on subsequent recordings
+        await new Promise(resolve => setTimeout(resolve, 200));
+        console.log('⏱️ Encoder cool-down complete');
+        setIsCleaningUp(false);
       };
 
       mediaRecorderRef.current = mediaRecorder;
@@ -677,7 +681,7 @@ function App() {
       }
       console.error('Recording error:', err);
     }
-  }, [isRecording, isProcessing, micPermissionGranted, isRequestingPermission]);
+  }, [isRecording, isProcessing, micPermissionGranted, isRequestingPermission, isCleaningUp]);
 
   const handleButtonPress = useCallback(async (e) => {
     e?.preventDefault();
