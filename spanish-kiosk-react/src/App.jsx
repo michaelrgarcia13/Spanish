@@ -1,4 +1,10 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
+import eruda from 'eruda';
+
+// Initialize Eruda console for mobile debugging
+if (typeof window !== 'undefined') {
+  eruda.init();
+}
 
 // Get API base URL from window or default to localhost for development
 const API_BASE = window.__API_BASE__ || 'http://localhost:3000';
@@ -233,7 +239,7 @@ const ttsManager = new TTSManager();
 const isiOS = typeof navigator !== 'undefined' && /iP(hone|ad|od)/.test(navigator.userAgent);
 
 // UI Components  
-function MessageBubble({ text, isUser, label, onSpeak, messageId, translation, hasBeenClicked, showEnglish }) {
+function MessageBubble({ text, isUser, label, onSpeak, messageId, translation, hasBeenClicked }) {
   if (!text) return null;
   
   const bubbleStyle = isUser 
@@ -298,7 +304,7 @@ function MessageBubble({ text, isUser, label, onSpeak, messageId, translation, h
           }}
         >
           <div>{text}</div>
-          {translation && hasBeenClicked && showEnglish && (
+          {translation && hasBeenClicked && (
             <div style={{
               fontSize: '14px',
               color: isUser ? 'rgba(255,255,255,0.8)' : '#6b7280',
@@ -328,7 +334,6 @@ function App() {
   
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [showEnglish, setShowEnglish] = useState(false);
   const [error, setError] = useState('');
   const [showInstallPrompt, setShowInstallPrompt] = useState(false);
   const [deferredPrompt, setDeferredPrompt] = useState(null);
@@ -852,7 +857,7 @@ function App() {
       setIsProcessing(false);
       abortControllerRef.current = null;
     }
-  }, [messages, showEnglish]);
+  }, [messages]);
 
   const translateText = useCallback(async (text) => {
     try {
@@ -1034,23 +1039,6 @@ function App() {
         
         <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
           <button
-            onClick={() => setShowEnglish(!showEnglish)}
-            style={{
-              padding: '10px 16px',
-              fontSize: '14px',
-              fontWeight: '600',
-              color: showEnglish ? 'white' : '#667eea',
-              backgroundColor: showEnglish ? '#667eea' : 'transparent',
-              border: '2px solid #667eea',
-              borderRadius: '12px',
-              cursor: 'pointer',
-              transition: 'all 0.2s',
-            }}
-          >
-            {showEnglish ? '🇺🇸 EN' : '🇪🇸 ES'}
-          </button>
-          
-          <button
             onClick={clearConversation}
             style={{
               padding: '10px 16px',
@@ -1095,7 +1083,6 @@ function App() {
                 messageId={messageId}
                 translation={translation}
                 hasBeenClicked={hasBeenClicked}
-                showEnglish={showEnglish}
               />
             );
           } else {
@@ -1117,7 +1104,6 @@ function App() {
                     messageId={correctionId}
                     translation={correctionTranslation}
                     hasBeenClicked={correctionClicked}
-                    showEnglish={showEnglish}
                   />
                 )}
                 {msg.reply_es && (
@@ -1129,7 +1115,6 @@ function App() {
                     messageId={replyId}
                     translation={replyTranslation}
                     hasBeenClicked={replyClicked}
-                    showEnglish={showEnglish}
                   />
                 )}
               </div>

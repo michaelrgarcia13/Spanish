@@ -13,6 +13,7 @@
     "@capacitor/cli": "^7.4.4",
     "@capacitor/core": "^7.4.4",
     "@capacitor/ios": "^7.4.4",
+    "eruda": "^3.4.3",
     "react": "^19.1.1",
     "react-dom": "^19.1.1"
   },
