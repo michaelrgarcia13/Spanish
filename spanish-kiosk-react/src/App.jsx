@@ -599,8 +599,18 @@ function App() {
       recordingStartTimeRef.current = Date.now();
 
       let mimeType = '';
+      const isiOS = /iPhone|iPad|iPod/.test(navigator.userAgent);
+      
       if (isiOS) {
-        mimeType = 'audio/mp4';
+        // Try audio/mp4 first for iOS, but check if supported
+        if (MediaRecorder.isTypeSupported('audio/mp4')) {
+          mimeType = 'audio/mp4';
+        } else if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
+          mimeType = 'audio/webm;codecs=opus';
+        } else if (MediaRecorder.isTypeSupported('audio/webm')) {
+          mimeType = 'audio/webm';
+        }
+        console.log('📱 iOS detected, using mimeType:', mimeType || 'default');
       } else {
         const types = ['audio/mp4', 'audio/webm;codecs=opus', 'audio/webm', 'audio/ogg'];
         for (const type of types) {
@@ -609,9 +619,11 @@ function App() {
             break;
           }
         }
+        console.log('🖥️ Desktop/Android detected, using mimeType:', mimeType || 'default');
       }
       
       const mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : {});
+      console.log('🎙️ MediaRecorder created with actual mimeType:', mediaRecorder.mimeType);
 
       mediaRecorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
@@ -723,6 +735,11 @@ function App() {
     const signal = abortControllerRef.current.signal;
     
     try {
+      console.log('📦 Audio blob details:', {
+        size: audioBlob.size,
+        type: audioBlob.type || 'unknown'
+      });
+      
       const formData = new FormData();
       
       let filename = 'audio.mp4';
@@ -734,6 +751,7 @@ function App() {
         filename = 'audio.wav';
       }
       
+      console.log('📤 Sending to STT:', { filename, type: audioBlob.type });
       formData.append('audio', audioBlob, filename);
 
       const sttResponse = await fetch(`${API_BASE}/stt`, {
@@ -816,12 +834,12 @@ function App() {
         needs_correction: !!data.needs_correction
       };
 
-      let actualAssistantIndex = -1;
+      // Calculate the assistant index BEFORE setState to avoid race conditions
+      const actualAssistantIndex = messages.length;
       
       setMessages(prev => {
         const newMessages = [...prev, assistantMessage];
         const actualIndex = newMessages.length - 1;
-        actualAssistantIndex = actualIndex;
         const userIndex = actualIndex - 1;
         
         if (userIndex >= 0 && newMessages[userIndex].role === 'user') {
