@@ -4,6 +4,8 @@ import express from 'express';
 import cors from 'cors';
 import multer from 'multer';
 import fetch from 'node-fetch';
+import ffmpeg from 'fluent-ffmpeg';
+import { Readable } from 'stream';
 
 const app = express();
 app.use(cors({ origin: true, credentials: false })); // loosen as needed
@@ -97,7 +99,7 @@ app.post('/chat', async (req, res) => {
   }
 });
 
-// ---- STT: Spanish transcription ----
+// ---- STT: Spanish transcription with ffmpeg normalization ----
 app.post('/stt', upload.single('audio'), async (req, res) => {
   try {
     const audioBuffer = req.file?.buffer;
@@ -116,24 +118,40 @@ app.post('/stt', upload.single('audio'), async (req, res) => {
       return res.status(400).json({ error: 'No audio data received' });
     }
 
-    // Use a more compatible filename based on MIME type
-    let filename = 'audio.webm'; // Default
-    if (mimetype.includes('mp4')) {
-      filename = 'audio.mp4';
-    } else if (mimetype.includes('wav')) {
-      filename = 'audio.wav';
-    } else if (mimetype.includes('ogg')) {
-      filename = 'audio.ogg';
-    }
+    console.log('🔧 Remuxing audio through ffmpeg to normalize format...');
 
-    console.log('Using filename for OpenAI:', filename);
+    // Convert uploaded audio to clean 16kHz mono WAV using ffmpeg
+    // This handles malformed MP4/AAC containers from iOS Chrome gracefully
+    const normalizedBuffer = await new Promise((resolve, reject) => {
+      const chunks = [];
+      const inputStream = Readable.from(audioBuffer);
+      
+      ffmpeg(inputStream)
+        .inputFormat(mimetype.includes('mp4') ? 'mp4' : 'webm')
+        .audioChannels(1)           // Mono
+        .audioFrequency(16000)      // 16kHz - optimal for Whisper
+        .format('wav')              // WAV is always clean
+        .on('error', (err) => {
+          console.error('❌ ffmpeg error:', err.message);
+          reject(new Error(`Audio conversion failed: ${err.message}`));
+        })
+        .on('end', () => {
+          console.log('✅ ffmpeg conversion complete');
+          resolve(Buffer.concat(chunks));
+        })
+        .pipe()
+        .on('data', (chunk) => chunks.push(chunk));
+    });
 
+    console.log(`📦 Normalized audio: ${normalizedBuffer.length} bytes (WAV 16kHz mono)`);
+
+    // Send normalized WAV to Whisper
     const form = new FormData();
-    form.append('file', new Blob([audioBuffer], { type: mimetype }), filename);
+    form.append('file', new Blob([normalizedBuffer], { type: 'audio/wav' }), 'audio.wav');
     form.append('model', OPENAI_STT_MODEL);
     form.append('language', 'es');
 
-    console.log('Sending to OpenAI STT with model:', OPENAI_STT_MODEL);
+    console.log('Sending normalized WAV to OpenAI STT');
 
     const r = await fetch('https://api.openai.com/v1/audio/transcriptions', {
       method: 'POST',
@@ -149,9 +167,7 @@ app.post('/stt', upload.single('audio'), async (req, res) => {
         status: r.status,
         statusText: r.statusText,
         error: errorText,
-        sentFilename: filename,
-        sentMimetype: mimetype,
-        bufferSize: audioBuffer.length
+        bufferSize: normalizedBuffer.length
       });
       return res.status(r.status).send(errorText);
     }
@@ -164,6 +180,7 @@ app.post('/stt', upload.single('audio'), async (req, res) => {
     
     res.json({ text: responseText });
   } catch (e) {
+    console.error('STT error:', e);
     res.status(500).json({ error: String(e) });
   }
 });

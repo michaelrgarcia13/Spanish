@@ -646,6 +646,11 @@ function App() {
           currentStreamRef.current = null;
         }
         
+        // Cool-down period to let iOS AVFoundation fully tear down encoder
+        // This prevents encoder state corruption on subsequent recordings
+        await new Promise(resolve => setTimeout(resolve, 200));
+        console.log('⏱️ Encoder cool-down complete');
+        
         if (audioChunksRef.current.length > 0) {
           const audioBlob = new Blob(audioChunksRef.current, { type: mediaRecorder.mimeType || mimeType });
           console.log('Audio blob:', audioBlob.size, 'bytes');
