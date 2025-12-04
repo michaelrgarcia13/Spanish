@@ -400,6 +400,7 @@ function App() {
   const [isRequestingPermission, setIsRequestingPermission] = useState(false);
   const [translations, setTranslations] = useState(new Map());
   const [clickedBubbles, setClickedBubbles] = useState(new Set());
+  const consecutiveFailuresRef = useRef(0);
 
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
@@ -822,6 +823,9 @@ function App() {
         throw lastError || new Error('STT failed after retries');
       }
 
+      // Success! Reset consecutive failure counter
+      consecutiveFailuresRef.current = 0;
+
       const userText = sttData.text || '';
 
       const isSpuriousResponse = (text) => {
@@ -982,9 +986,18 @@ function App() {
         return;
       }
       
-      // User-friendly error messages
+      // Track consecutive failures for Chrome iOS encoder corruption detection
       if (err.message.includes('STT failed') || err.message.includes('could not be decoded')) {
-        setError('Audio quality issue detected. Please try recording again.');
+        consecutiveFailuresRef.current += 1;
+        console.warn(`⚠️ Consecutive STT failures: ${consecutiveFailuresRef.current}`);
+        
+        // After 2 consecutive decode failures, suggest clearing to reset encoder
+        if (consecutiveFailuresRef.current >= 2) {
+          setError('Audio encoder issue detected. Tap "Clear" button to reset and try again.');
+          console.error('🔧 Encoder likely corrupted - user should clear conversation');
+        } else {
+          setError('Audio quality issue detected. Please try recording again.');
+        }
       } else if (err.message.includes('network') || err.message.includes('fetch')) {
         setError('Network issue. Check your connection and try again.');
       } else {
@@ -1069,6 +1082,8 @@ function App() {
     setTranslations(new Map());
     setClickedBubbles(new Set());
     ttsCache.clear();
+    consecutiveFailuresRef.current = 0; // Reset encoder failure counter
+    console.log('🔄 Conversation cleared - encoder state reset');
   }, []);
 
   const handleEnableAudio = useCallback(async () => {
