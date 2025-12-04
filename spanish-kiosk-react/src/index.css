@@ -79,27 +79,31 @@ html, body {
   -webkit-touch-callout: none !important;
 }
 
-/* Eruda console - force text selection and prevent app interference */
-#eruda,
-[id^="eruda-"],
-.eruda-entry-btn,
+/* Eruda console - maximum text selection capability */
 .eruda-dev-tools,
-.eruda-dev-tools * {
+.eruda-dev-tools *,
+#eruda,
+#eruda *,
+.eruda-console,
+.eruda-console *,
+.eruda-logs,
+.eruda-logs * {
   user-select: text !important;
   -webkit-user-select: text !important;
-  -webkit-touch-callout: default !important;
+  -webkit-touch-callout: text !important;
   pointer-events: auto !important;
-  z-index: 999999 !important;
 }
 
-/* When Eruda panel is open, block app interactions underneath */
-.eruda-dev-tools:not(.eruda-hidden) {
+/* Prevent app from capturing events when Eruda is visible */
+body:has(.eruda-dev-tools:not([style*="display: none"])) > #root {
+  pointer-events: none !important;
+}
+
+/* Ensure Eruda container blocks app interaction */
+.eruda-dev-tools {
   position: fixed !important;
-  top: 0 !important;
-  left: 0 !important;
-  width: 100% !important;
-  height: 100% !important;
-  background: rgba(0, 0, 0, 0.01) !important;
+  z-index: 100000 !important;
+  pointer-events: auto !important;
 }
 
 /* Isolate pointer events when holding mic button */

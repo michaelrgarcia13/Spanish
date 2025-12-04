@@ -4,6 +4,64 @@ import eruda from 'eruda';
 // Initialize Eruda console for mobile debugging
 if (typeof window !== 'undefined') {
   eruda.init();
+  
+  // Add custom "Copy All Logs" button to Eruda after it loads
+  setTimeout(() => {
+    try {
+      const consoleTool = eruda.get('console');
+      if (consoleTool) {
+        // Override the console to capture all logs
+        const allLogs = [];
+        const originalLog = console.log;
+        const originalError = console.error;
+        const originalWarn = console.warn;
+        
+        console.log = function(...args) {
+          allLogs.push(['LOG', ...args]);
+          originalLog.apply(console, args);
+        };
+        console.error = function(...args) {
+          allLogs.push(['ERROR', ...args]);
+          originalError.apply(console, args);
+        };
+        console.warn = function(...args) {
+          allLogs.push(['WARN', ...args]);
+          originalWarn.apply(console, args);
+        };
+        
+        // Add copy button to Eruda toolbar
+        window.copyAllLogs = () => {
+          const logText = allLogs.map(log => {
+            const [type, ...messages] = log;
+            const msgStr = messages.map(m => 
+              typeof m === 'object' ? JSON.stringify(m, null, 2) : String(m)
+            ).join(' ');
+            return `${type}: ${msgStr}`;
+          }).join('\n');
+          
+          navigator.clipboard.writeText(logText).then(() => {
+            originalLog('✅ Copied all logs to clipboard!');
+          }).catch(err => {
+            originalError('Failed to copy logs:', err);
+            // Fallback: create temporary textarea
+            const textarea = document.createElement('textarea');
+            textarea.value = logText;
+            textarea.style.position = 'fixed';
+            textarea.style.opacity = '0';
+            document.body.appendChild(textarea);
+            textarea.select();
+            document.execCommand('copy');
+            document.body.removeChild(textarea);
+            originalLog('✅ Copied all logs using fallback method!');
+          });
+        };
+        
+        originalLog('📋 Type copyAllLogs() in console or use Ctrl+Shift+C to copy all logs');
+      }
+    } catch (e) {
+      console.error('Failed to setup Eruda copy helper:', e);
+    }
+  }, 1000);
 }
 
 // Get API base URL from window or default to localhost for development
