@@ -580,6 +580,9 @@ function App() {
       setError('');
       audioChunksRef.current = [];
 
+      // Detect iOS early so we can use it in constraints
+      const isiOS = /iPhone|iPad|iPod/.test(navigator.userAgent);
+
       const constraints = {
         audio: {
           sampleRate: { ideal: 16000, min: 8000, max: 48000 },
@@ -599,7 +602,6 @@ function App() {
       recordingStartTimeRef.current = Date.now();
 
       let mimeType = '';
-      const isiOS = /iPhone|iPad|iPod/.test(navigator.userAgent);
       
       if (isiOS) {
         // Try audio/mp4 first for iOS, but check if supported
