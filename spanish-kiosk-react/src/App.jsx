@@ -733,6 +733,15 @@ function App() {
     
     console.log('Processing audio:', audioBlob.size, 'bytes');
     
+    // Ensure any lingering mic streams are stopped before processing
+    if (currentStreamRef.current) {
+      currentStreamRef.current.getTracks().forEach(track => {
+        track.stop();
+        console.log('🛑 Cleanup: Stopped lingering track:', track.id);
+      });
+      currentStreamRef.current = null;
+    }
+    
     abortControllerRef.current = new AbortController();
     const signal = abortControllerRef.current.signal;
     
@@ -756,21 +765,63 @@ function App() {
       console.log('📤 Sending to STT:', { filename, type: audioBlob.type });
       formData.append('audio', audioBlob, filename);
 
-      const sttResponse = await fetch(`${API_BASE}/stt`, {
-        method: 'POST',
-        body: formData,
-        signal
-      });
+      // Retry logic for STT with exponential backoff
+      const maxRetries = 3;
+      let lastError = null;
+      let sttData = null;
+      
+      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+          if (attempt > 1) {
+            const delay = Math.pow(2, attempt - 1) * 250; // 500ms, 1000ms
+            console.log(`🔄 STT retry attempt ${attempt}/${maxRetries} after ${delay}ms delay...`);
+            await new Promise(resolve => setTimeout(resolve, delay));
+          }
+          
+          const sttResponse = await fetch(`${API_BASE}/stt`, {
+            method: 'POST',
+            body: formData,
+            signal
+          });
 
-      if (signal.aborted) return;
+          if (signal.aborted) return;
 
-      if (!sttResponse.ok) {
-        const errorText = await sttResponse.text();
-        console.error('STT error:', errorText);
-        throw new Error(`STT failed: ${sttResponse.status}`);
+          if (!sttResponse.ok) {
+            const errorText = await sttResponse.text();
+            lastError = new Error(`STT failed: ${sttResponse.status}`);
+            
+            // Check if it's a decode error that might succeed on retry
+            if (errorText.includes('could not be decoded') && attempt < maxRetries) {
+              console.warn(`⚠️ Decode error on attempt ${attempt}, will retry...`);
+              continue; // Try again
+            }
+            
+            console.error('STT error:', errorText);
+            throw lastError;
+          }
+
+          sttData = await sttResponse.json();
+          
+          // Success! Log if this was a retry
+          if (attempt > 1) {
+            console.log(`✅ STT succeeded on attempt ${attempt}`);
+          }
+          
+          // Break out of retry loop on success
+          lastError = null;
+          break;
+        } catch (fetchError) {
+          lastError = fetchError;
+          if (attempt === maxRetries || signal.aborted) {
+            throw fetchError;
+          }
+        }
+      }
+      
+      if (lastError || !sttData) {
+        throw lastError || new Error('STT failed after retries');
       }
 
-      const sttData = await sttResponse.json();
       const userText = sttData.text || '';
 
       const isSpuriousResponse = (text) => {
@@ -930,7 +981,15 @@ function App() {
         console.log('Request cancelled');
         return;
       }
-      setError('Error processing audio: ' + err.message);
+      
+      // User-friendly error messages
+      if (err.message.includes('STT failed') || err.message.includes('could not be decoded')) {
+        setError('Audio quality issue detected. Please try recording again.');
+      } else if (err.message.includes('network') || err.message.includes('fetch')) {
+        setError('Network issue. Check your connection and try again.');
+      } else {
+        setError('Error processing audio. Please try again.');
+      }
     } finally {
       setIsProcessing(false);
       abortControllerRef.current = null;
