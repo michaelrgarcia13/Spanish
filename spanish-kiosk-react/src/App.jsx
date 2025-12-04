@@ -1088,10 +1088,12 @@ function App() {
       display: 'flex',
       flexDirection: 'column',
       fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
-      position: 'relative',
+      position: 'fixed',
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
       overflow: 'hidden',
-      paddingTop: 'env(safe-area-inset-top)',
-      paddingBottom: 'env(safe-area-inset-bottom)',
     }}>
       
       {/* iOS First Run Screen */}
@@ -1154,7 +1156,10 @@ function App() {
       <div style={{
         background: 'rgba(255, 255, 255, 0.95)',
         backdropFilter: 'blur(10px)',
-        padding: '20px',
+        paddingTop: 'max(20px, env(safe-area-inset-top))',
+        paddingBottom: '20px',
+        paddingLeft: '20px',
+        paddingRight: '20px',
         boxShadow: '0 2px 20px rgba(0,0,0,0.1)',
         display: 'flex',
         justifyContent: 'space-between',
@@ -1332,7 +1337,10 @@ function App() {
 
       {/* Record Button */}
       <div style={{
-        padding: '24px',
+        paddingTop: '24px',
+        paddingBottom: 'max(24px, env(safe-area-inset-bottom))',
+        paddingLeft: '24px',
+        paddingRight: '24px',
         background: 'rgba(255, 255, 255, 0.95)',
         backdropFilter: 'blur(10px)',
         borderTop: '1px solid rgba(0,0,0,0.1)',
