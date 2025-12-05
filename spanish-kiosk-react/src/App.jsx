@@ -149,6 +149,8 @@ class TTSManager {
     this.processing = false;
     this.pausedByRecording = false;
     this.savedState = null;
+    this.isResetting = false;
+    this.opIdAtStart = null;
   }
 
   ensureAudioEl() {
@@ -242,12 +244,43 @@ class TTSManager {
     }
   }
 
+  beginReset() {
+    console.log('🧹 Begin TTS reset (quiesce)');
+    this.isResetting = true;
+  }
+
+  endReset() {
+    console.log('✅ End TTS reset (ready)');
+    this.isResetting = false;
+  }
+
+  clearQueue() {
+    // Revoke all queued blob URLs
+    while (this.queue.length > 0) {
+      const item = this.queue.shift();
+      try {
+        item.revoke();
+      } catch (e) {
+        console.warn('Error revoking URL:', e);
+      }
+    }
+    console.log('🗑️ Queue cleared');
+  }
+
   stopIfPlaying(id) {
-    if (this.playingId === id && this.isPlaying()) {
+    // Idempotent - safe to call even if nothing playing
+    if (!this.audio) return false;
+    
+    if (id && this.playingId !== id) {
+      return false;
+    }
+    
+    if (this.isPlaying() || this.playingId) {
       // Mirror natural end cleanup
       try {
         this.audio.pause();
         this.audio.currentTime = 0;
+        this.audio.src = '';
       } catch (e) {
         console.warn('Audio pause error:', e);
       }
@@ -255,14 +288,18 @@ class TTSManager {
       const wasPlaying = this.playingId;
       this.playingId = null;
       this.processing = false;
-      console.log('🛑 Stopped:', wasPlaying);
+      if (wasPlaying) {
+        console.log('🛑 Stopped:', wasPlaying);
+      }
       
-      // Immediately try to continue queued items
-      queueMicrotask(() => {
-        if (this.queue.length > 0 && !this.processing) {
-          this._process();
-        }
-      });
+      // Only continue queue if not resetting
+      if (!this.isResetting) {
+        queueMicrotask(() => {
+          if (this.queue.length > 0 && !this.processing && !this.isResetting) {
+            this._process();
+          }
+        });
+      }
       
       return true;
     }
@@ -270,12 +307,18 @@ class TTSManager {
   }
 
   async _process() {
+    if (this.isResetting) {
+      console.log('⏸️ Skipping _process - resetting');
+      return;
+    }
+    
     if (this.processing || !this.queue.length) {
       if (this.processing) console.log('⏸️ Already processing');
       return;
     }
 
     this.processing = true;
+    this.opIdAtStart = null; // Will be set by enqueue context
     console.log('🔄 Processing queue, items:', this.queue.length);
 
     while (this.queue.length > 0) {
@@ -294,11 +337,23 @@ class TTSManager {
         
         await new Promise((resolve) => {
           const onEnd = () => {
+            if (this.isResetting) {
+              console.log('⏹️ Ignoring onEnd - resetting');
+              cleanup();
+              resolve();
+              return;
+            }
             console.log('✅ Ended:', id);
             cleanup();
             resolve();
           };
           const onErr = (e) => {
+            if (this.isResetting) {
+              console.log('⏹️ Ignoring onErr - resetting');
+              cleanup();
+              resolve();
+              return;
+            }
             console.error('❌ Error:', id, e);
             cleanup();
             resolve();
@@ -566,54 +621,62 @@ function App() {
 
   const cancelProcessing = useCallback(() => {
     // Idempotent guard
-    if (!busyRef.current.isProcessing && !busyRef.current.autoTTSPlaying) {
+    if (!busyRef.current.isRecording && !busyRef.current.isProcessing && !busyRef.current.autoTTSPlaying) {
       setIsProcessing(false);
       return;
     }
 
-    console.log('🛑 Cancel pressed — tearing down processing + TTS');
+    console.log('🛑 Cancel pressed — quiescing all operations');
 
-    // 1) Immediately release coordination locks
-    busyRef.current.isProcessing = false;
-    busyRef.current.autoTTSPlaying = false;
-    setIsProcessing(false);
+    // 1) Bump operation ID immediately (marks this cancel as authoritative)
+    const myOp = ++currentOpIdRef.current;
+    console.log('🔢 New operation ID:', myOp);
 
-    // 2) Stop any TTS now (don't wait for ended)
+    // 2) Begin TTS reset (sets isResetting flag to block new processing)
+    ttsManager.beginReset();
+
     try {
-      if (ttsManager.isPlaying()) {
-        ttsManager.audio.pause();
-        ttsManager.audio.currentTime = 0;
-        ttsManager.playingId = null;
-        ttsManager.processing = false;
-      }
-    } catch (e) {
-      console.warn('TTS stop error:', e);
-    }
+      // 3) Stop audio and clear queue atomically
+      ttsManager.stopIfPlaying();
+      ttsManager.clearQueue();
+      ttsManager.processing = false;
+      ttsManager.playingId = null;
+      ttsManager.pausedByRecording = false;
+      ttsManager.savedState = null;
 
-    // 3) Abort in-flight STT/chat request
-    try {
+      // 4) Abort in-flight network requests
       if (abortControllerRef.current) {
         abortControllerRef.current.abort();
       }
-    } catch (e) {
-      console.warn('Abort error:', e);
-    }
 
-    // 4) Defensive: close any mic stream
-    try {
+      // 5) Stop any active microphone tracks
       if (currentStreamRef.current) {
-        currentStreamRef.current.getTracks().forEach(track => track.stop());
+        currentStreamRef.current.getTracks().forEach(track => {
+          track.stop();
+          console.log('🛑 Stopped track:', track.id);
+        });
         currentStreamRef.current = null;
       }
+
+      // 6) Stop MediaRecorder if active
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+        mediaRecorderRef.current.stop();
+      }
     } catch (e) {
-      console.warn('Stream cleanup error:', e);
+      console.error('Error during cancel cleanup:', e);
+    } finally {
+      // 7) Clear coordination flags (after TTS is fully quiesced)
+      busyRef.current.isRecording = false;
+      busyRef.current.isProcessing = false;
+      busyRef.current.autoTTSPlaying = false;
+      setIsProcessing(false);
+
+      // 8) End TTS reset (clears isResetting flag)
+      ttsManager.endReset();
+
+      setError('');
+      console.log('✅ Cancel complete - operation:', myOp, 'state:', JSON.stringify(busyRef.current));
     }
-
-    // 5) Bump op id so late resolves are ignored
-    currentOpIdRef.current++;
-
-    setError('');
-    console.log('✅ Cancel complete; state released:', JSON.stringify(busyRef.current));
   }, []);
 
   // Build WAV file with 44-byte header + PCM data
