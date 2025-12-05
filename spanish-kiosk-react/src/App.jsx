@@ -148,6 +148,7 @@ class TTSManager {
     this.queue = [];
     this.processing = false;
     this.isResetting = false;
+    this.playAbort = null;
   }
 
   ensureAudioEl() {
@@ -218,11 +219,14 @@ class TTSManager {
   }
 
   pauseIfPlaying(options = {}) {
-    if (this.isPlaying()) {
-      this.audio.pause();
-      this.audio.currentTime = 0;
+    if (this.isPlaying() || this.playingId) {
+      // Abort current playback - this resolves the pending await
+      this.playAbort?.abort();
       
-      // Force-stop current playback to unblock _process loop
+      this.audio.pause();
+      this.audio.removeAttribute('src');
+      this.audio.load();
+      
       this.playingId = null;
       this.processing = false;
       
@@ -254,6 +258,9 @@ class TTSManager {
   }
 
   clearQueue() {
+    // Abort current playback if any
+    this.playAbort?.abort();
+    
     // Revoke all queued blob URLs
     while (this.queue.length > 0) {
       const item = this.queue.shift();
@@ -275,13 +282,15 @@ class TTSManager {
     }
     
     if (this.isPlaying() || this.playingId) {
-      // Mirror natural end cleanup
+      // Abort current playback
+      this.playAbort?.abort();
+      
       try {
         this.audio.pause();
-        this.audio.currentTime = 0;
-        this.audio.src = '';
+        this.audio.removeAttribute('src');
+        this.audio.load();
       } catch (e) {
-        console.warn('Audio pause error:', e);
+        console.warn('Audio stop error:', e);
       }
       
       const wasPlaying = this.playingId;
@@ -336,34 +345,28 @@ class TTSManager {
       
       console.log('🔊 Playing:', id);
 
+      // Create new AbortController for this playback
+      this.playAbort?.abort();
+      this.playAbort = new AbortController();
+
       try {
         this.audio.src = url;
         await this.audio.play();
         
-        await new Promise((resolve) => {
-          const onEnd = () => {
-            console.log('✅ Ended:', id);
-            cleanup();
-            resolve();
-          };
-          const onErr = (e) => {
-            console.error('❌ Error:', id, e);
-            cleanup();
-            resolve();
-          };
-          const cleanup = () => {
-            this.audio.removeEventListener('ended', onEnd);
-            this.audio.removeEventListener('error', onErr);
-            revoke();
-            if (fromCache) {
-              ttsCache.markStopped(id);
-            }
-          };
-          this.audio.addEventListener('ended', onEnd, { once: true });
-          this.audio.addEventListener('error', onErr, { once: true });
-        });
+        // Wait for audio to end or be aborted
+        await this._waitForAudioEnd(this.audio, this.playAbort.signal);
+        
+        console.log('✅ Ended:', id);
+        revoke();
+        if (fromCache) {
+          ttsCache.markStopped(id);
+        }
       } catch (e) {
-        console.error('❌ Playback error:', id, e);
+        if (e.name === 'AbortError') {
+          console.log('⏹️ Aborted:', id);
+        } else {
+          console.error('❌ Playback error:', id, e);
+        }
         revoke();
         if (fromCache) {
           ttsCache.markStopped(id);
@@ -372,13 +375,30 @@ class TTSManager {
         this.playingId = null;
       }
 
-      if (this.queue.length > 0) {
+      if (this.queue.length > 0 && !this.isResetting) {
         await new Promise(resolve => setTimeout(resolve, 200));
       }
     }
 
     this.processing = false;
     console.log('✅ Queue complete');
+  }
+
+  _waitForAudioEnd(audio, signal) {
+    return new Promise((resolve, reject) => {
+      const cleanup = () => {
+        audio.removeEventListener('ended', onEnded);
+        audio.removeEventListener('error', onError);
+        signal?.removeEventListener('abort', onAbort);
+      };
+      const onEnded = () => { cleanup(); resolve(); };
+      const onError = () => { cleanup(); reject(new Error('audio error')); };
+      const onAbort = () => { cleanup(); reject(new DOMException('aborted', 'AbortError')); };
+
+      audio.addEventListener('ended', onEnded, { once: true });
+      audio.addEventListener('error', onError, { once: true });
+      if (signal) signal.addEventListener('abort', onAbort, { once: true });
+    });
   }
 }
 
