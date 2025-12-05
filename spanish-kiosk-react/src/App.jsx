@@ -907,7 +907,7 @@ function App() {
       }
       console.error('Recording error:', err);
     }
-  }, [isRecording, isProcessing, micPermissionGranted, isRequestingPermission, isCleaningUp, captureMode, createWAVBlob]);
+  }, [isRecording, isProcessing, micPermissionGranted, isRequestingPermission, isCleaningUp, captureMode]);
 
   const handleButtonPress = useCallback(async (e) => {
     e?.preventDefault();
@@ -994,7 +994,7 @@ function App() {
       mediaRecorderRef.current.stop();
       console.log('🛑 MediaRecorder stopped');
     }
-  }, [isRecording, isRequestingPermission, processAudio]);
+  }, [isRecording, isRequestingPermission]);
 
   const processAudio = useCallback(async (audioBlob) => {
     const startTime = Date.now();
