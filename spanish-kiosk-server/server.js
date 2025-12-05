@@ -99,7 +99,7 @@ app.post('/chat', async (req, res) => {
   }
 });
 
-// ---- STT: Spanish transcription with ffmpeg normalization ----
+// ---- STT: Spanish transcription with smart WAV/MP4 handling ----
 app.post('/stt', upload.single('audio'), async (req, res) => {
   try {
     const audioBuffer = req.file?.buffer;
@@ -118,40 +118,57 @@ app.post('/stt', upload.single('audio'), async (req, res) => {
       return res.status(400).json({ error: 'No audio data received' });
     }
 
-    console.log('🔧 Remuxing audio through ffmpeg to normalize format...');
+    let processedBuffer = audioBuffer;
+    let finalMimetype = mimetype;
+    
+    // Check if it's WAV by header (RIFF...WAVE) or mimetype
+    const isWAV = mimetype.includes('wav') || 
+                  (audioBuffer.length >= 12 && 
+                   audioBuffer[0] === 0x52 && audioBuffer[1] === 0x49 && 
+                   audioBuffer[2] === 0x46 && audioBuffer[3] === 0x46 &&
+                   audioBuffer[8] === 0x57 && audioBuffer[9] === 0x41 && 
+                   audioBuffer[10] === 0x56 && audioBuffer[11] === 0x45);
+    
+    if (isWAV) {
+      console.log('✅ WAV detected - bypassing ffmpeg, sending directly to Whisper');
+      finalMimetype = 'audio/wav';
+    } else {
+      console.log('🔧 Non-WAV audio - remuxing through ffmpeg to normalize format...');
 
-    // Convert uploaded audio to clean 16kHz mono WAV using ffmpeg
-    // This handles malformed MP4/AAC containers from iOS Chrome gracefully
-    const normalizedBuffer = await new Promise((resolve, reject) => {
-      const chunks = [];
-      const inputStream = Readable.from(audioBuffer);
+      // Convert uploaded audio to clean 16kHz mono WAV using ffmpeg
+      // This handles malformed MP4/AAC containers from iOS Chrome gracefully
+      processedBuffer = await new Promise((resolve, reject) => {
+        const chunks = [];
+        const inputStream = Readable.from(audioBuffer);
+        
+        ffmpeg(inputStream)
+          .inputFormat(mimetype.includes('mp4') ? 'mp4' : 'webm')
+          .audioChannels(1)           // Mono
+          .audioFrequency(16000)      // 16kHz - optimal for Whisper
+          .format('wav')              // WAV is always clean
+          .on('error', (err) => {
+            console.error('❌ ffmpeg error:', err.message);
+            reject(new Error(`Audio conversion failed: ${err.message}`));
+          })
+          .on('end', () => {
+            console.log('✅ ffmpeg conversion complete');
+            resolve(Buffer.concat(chunks));
+          })
+          .pipe()
+          .on('data', (chunk) => chunks.push(chunk));
+      });
       
-      ffmpeg(inputStream)
-        .inputFormat(mimetype.includes('mp4') ? 'mp4' : 'webm')
-        .audioChannels(1)           // Mono
-        .audioFrequency(16000)      // 16kHz - optimal for Whisper
-        .format('wav')              // WAV is always clean
-        .on('error', (err) => {
-          console.error('❌ ffmpeg error:', err.message);
-          reject(new Error(`Audio conversion failed: ${err.message}`));
-        })
-        .on('end', () => {
-          console.log('✅ ffmpeg conversion complete');
-          resolve(Buffer.concat(chunks));
-        })
-        .pipe()
-        .on('data', (chunk) => chunks.push(chunk));
-    });
+      finalMimetype = 'audio/wav';
+      console.log(`📦 Normalized audio: ${processedBuffer.length} bytes (WAV 16kHz mono)`);
+    }
 
-    console.log(`📦 Normalized audio: ${normalizedBuffer.length} bytes (WAV 16kHz mono)`);
-
-    // Send normalized WAV to Whisper
+    // Send to Whisper
     const form = new FormData();
-    form.append('file', new Blob([normalizedBuffer], { type: 'audio/wav' }), 'audio.wav');
+    form.append('file', new Blob([processedBuffer], { type: finalMimetype }), 'audio.wav');
     form.append('model', OPENAI_STT_MODEL);
     form.append('language', 'es');
 
-    console.log('Sending normalized WAV to OpenAI STT');
+    console.log('Sending to OpenAI STT (type:', finalMimetype, ')');
 
     const r = await fetch('https://api.openai.com/v1/audio/transcriptions', {
       method: 'POST',
@@ -167,7 +184,7 @@ app.post('/stt', upload.single('audio'), async (req, res) => {
         status: r.status,
         statusText: r.statusText,
         error: errorText,
-        bufferSize: normalizedBuffer.length
+        bufferSize: processedBuffer.length
       });
       return res.status(r.status).send(errorText);
     }

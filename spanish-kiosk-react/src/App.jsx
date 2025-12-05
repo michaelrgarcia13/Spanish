@@ -436,6 +436,7 @@ function App() {
   const [isCleaningUp, setIsCleaningUp] = useState(false);
   const [error, setError] = useState('');
   const [showInstallPrompt, setShowInstallPrompt] = useState(false);
+  const [captureMode, setCaptureMode] = useState('mp4'); // 'mp4' or 'wav'
   const [deferredPrompt, setDeferredPrompt] = useState(null);
   const [micPermissionGranted, setMicPermissionGranted] = useState(false);
   const [permissionRequested, setPermissionRequested] = useState(false);
@@ -443,6 +444,7 @@ function App() {
   const [translations, setTranslations] = useState(new Map());
   const [clickedBubbles, setClickedBubbles] = useState(new Set());
   const consecutiveFailuresRef = useRef(0);
+  const wavSuccessCountRef = useRef(0);
 
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
@@ -561,6 +563,44 @@ function App() {
     setError('');
   }, []);
 
+  // Build WAV file with 44-byte header + PCM data
+  const createWAVBlob = useCallback((pcm16Data, sampleRate) => {
+    const numChannels = 1;
+    const bitsPerSample = 16;
+    const bytesPerSample = bitsPerSample / 8;
+    const blockAlign = numChannels * bytesPerSample;
+    const dataSize = pcm16Data.length * bytesPerSample;
+    const buffer = new ArrayBuffer(44 + dataSize);
+    const view = new DataView(buffer);
+    
+    const writeString = (offset, string) => {
+      for (let i = 0; i < string.length; i++) {
+        view.setUint8(offset + i, string.charCodeAt(i));
+      }
+    };
+    
+    // WAV header
+    writeString(0, 'RIFF');
+    view.setUint32(4, 36 + dataSize, true);
+    writeString(8, 'WAVE');
+    writeString(12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true); // PCM
+    view.setUint16(22, numChannels, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * blockAlign, true);
+    view.setUint16(32, blockAlign, true);
+    view.setUint16(34, bitsPerSample, true);
+    writeString(36, 'data');
+    view.setUint32(40, dataSize, true);
+    
+    // PCM data
+    const dataView = new Int16Array(buffer, 44);
+    dataView.set(pcm16Data);
+    
+    return new Blob([buffer], { type: 'audio/wav' });
+  }, []);
+
   const requestMicPermissionOnce = useCallback(async () => {
     if (permissionRequested || isRequestingPermission) return;
     
@@ -600,7 +640,7 @@ function App() {
   }, [permissionRequested, isRequestingPermission]);
 
   const startRecording = useCallback(async (e) => {
-    console.log('🎤 startRecording');
+    console.log('🎤 startRecording (mode:', captureMode, ')');
     
     if (e) {
       e.preventDefault();
@@ -623,7 +663,6 @@ function App() {
       setError('');
       audioChunksRef.current = [];
 
-      // Detect iOS early so we can use it in constraints
       const isiOS = /iPhone|iPad|iPod/.test(navigator.userAgent);
 
       const constraints = {
@@ -643,6 +682,138 @@ function App() {
 
       setIsRecording(true);
       recordingStartTimeRef.current = Date.now();
+
+      // WAV fallback mode: Use Web Audio API instead of MediaRecorder
+      if (captureMode === 'wav') {
+        console.log('🎵 Using WAV capture mode (AudioWorklet/ScriptProcessor)');
+        
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        const audioContext = new AudioContext({ sampleRate: 16000 });
+        const source = audioContext.createMediaStreamSource(stream);
+        const pcmChunks = [];
+        
+        let processorNode;
+        const maxDuration = 25000; // 25s cap for WAV mode
+        const startTime = Date.now();
+        
+        // Try AudioWorklet first, fallback to ScriptProcessor
+        const useWorklet = typeof AudioWorkletNode !== 'undefined' && audioContext.audioWorklet;
+        
+        if (useWorklet) {
+          // AudioWorklet (preferred, non-deprecated)
+          try {
+            const workletCode = `
+              class PCMRecorderProcessor extends AudioWorkletProcessor {
+                process(inputs, outputs, parameters) {
+                  const input = inputs[0];
+                  if (input && input[0]) {
+                    const inputData = input[0];
+                    const pcm16 = new Int16Array(inputData.length);
+                    for (let i = 0; i < inputData.length; i++) {
+                      const s = Math.max(-1, Math.min(1, inputData[i]));
+                      pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+                    }
+                    this.port.postMessage(pcm16);
+                  }
+                  return true;
+                }
+              }
+              registerProcessor('pcm-recorder-processor', PCMRecorderProcessor);
+            `;
+            const blob = new Blob([workletCode], { type: 'application/javascript' });
+            const url = URL.createObjectURL(blob);
+            
+            await audioContext.audioWorklet.addModule(url);
+            processorNode = new AudioWorkletNode(audioContext, 'pcm-recorder-processor');
+            
+            processorNode.port.onmessage = (e) => {
+              if (isRecording && (Date.now() - startTime) < maxDuration) {
+                pcmChunks.push(e.data);
+              }
+            };
+            
+            source.connect(processorNode);
+            processorNode.connect(audioContext.destination);
+            console.log('✅ AudioWorklet initialized');
+            URL.revokeObjectURL(url);
+          } catch (workletError) {
+            console.warn('⚠️ AudioWorklet failed, falling back to ScriptProcessor:', workletError);
+            useWorklet = false;
+          }
+        }
+        
+        if (!useWorklet) {
+          // ScriptProcessor fallback (deprecated but widely supported)
+          processorNode = audioContext.createScriptProcessor(4096, 1, 1);
+          processorNode.onaudioprocess = (e) => {
+            if (isRecording && (Date.now() - startTime) < maxDuration) {
+              const inputData = e.inputBuffer.getChannelData(0);
+              const pcm16 = new Int16Array(inputData.length);
+              for (let i = 0; i < inputData.length; i++) {
+                const s = Math.max(-1, Math.min(1, inputData[i]));
+                pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+              }
+              pcmChunks.push(pcm16);
+            }
+          };
+          source.connect(processorNode);
+          processorNode.connect(audioContext.destination);
+          console.log('✅ ScriptProcessor initialized');
+        }
+        
+        // Store WAV cleanup function
+        mediaRecorderRef.current = {
+          isWAV: true,
+          audioContext,
+          source,
+          processorNode,
+          stream,
+          stop: async () => {
+            console.log('🛑 WAV: Stopping capture...');
+            
+            // Disconnect nodes
+            if (processorNode) {
+              processorNode.disconnect();
+              if (useWorklet && processorNode.port) {
+                processorNode.port.close();
+              }
+            }
+            source.disconnect();
+            
+            // Close context
+            await audioContext.close();
+            
+            // Stop stream
+            stream.getTracks().forEach(track => {
+              track.stop();
+              console.log('🛑 WAV: Stopped track:', track.id);
+            });
+            
+            // Build WAV blob
+            if (pcmChunks.length > 0) {
+              const totalLength = pcmChunks.reduce((acc, arr) => acc + arr.length, 0);
+              const wavBuffer = new Int16Array(totalLength);
+              let offset = 0;
+              for (const chunk of pcmChunks) {
+                wavBuffer.set(chunk, offset);
+                offset += chunk.length;
+              }
+              
+              const wavBlob = createWAVBlob(wavBuffer, 16000);
+              console.log('📦 WAV blob:', wavBlob.size, 'bytes');
+              
+              // Cleanup refs
+              pcmChunks.length = 0;
+              
+              return wavBlob;
+            }
+            return null;
+          }
+        };
+        
+        console.log('🎙️ WAV recording started');
+        return;
+      }
 
       let mimeType = '';
       
@@ -693,6 +864,7 @@ function App() {
         if (audioChunksRef.current.length > 0) {
           const audioBlob = new Blob(audioChunksRef.current, { type: mediaRecorder.mimeType || mimeType });
           console.log('Audio blob:', audioBlob.size, 'bytes');
+          const recorderRef = mediaRecorderRef.current;
           mediaRecorderRef.current = null;
           await processAudio(audioBlob);
         } else {
@@ -702,8 +874,7 @@ function App() {
           mediaRecorderRef.current = null;
         }
         
-        // Cool-down period AFTER processing to let iOS AVFoundation fully tear down encoder
-        // This prevents encoder state corruption on subsequent recordings
+        // Cool-down period AFTER processing
         await new Promise(resolve => setTimeout(resolve, 200));
         console.log('⏱️ Encoder cool-down complete');
         setIsCleaningUp(false);
@@ -780,11 +951,36 @@ function App() {
     busyRef.current.isProcessing = true;
     setIsRecording(false);
     
-    if (mediaRecorderRef.current?.state === 'recording') {
+    // Handle both MediaRecorder and WAV modes
+    if (mediaRecorderRef.current?.isWAV) {
+      // WAV mode cleanup
+      setIsCleaningUp(true);
+      try {
+        const wavBlob = await mediaRecorderRef.current.stop();
+        mediaRecorderRef.current = null;
+        
+        if (wavBlob && wavBlob.size > 0) {
+          await processAudio(wavBlob);
+        } else {
+          console.log('No WAV data');
+          setIsProcessing(false);
+          setError('No audio recorded. Try speaking closer to the microphone.');
+        }
+      } catch (err) {
+        console.error('WAV stop error:', err);
+        setIsProcessing(false);
+        setError('Error stopping WAV recording.');
+      } finally {
+        await new Promise(resolve => setTimeout(resolve, 200));
+        console.log('⏱️ WAV cool-down complete');
+        setIsCleaningUp(false);
+      }
+    } else if (mediaRecorderRef.current?.state === 'recording') {
+      // MP4 MediaRecorder mode
       mediaRecorderRef.current.stop();
       console.log('🛑 MediaRecorder stopped');
     }
-  }, [isRecording, isRequestingPermission]);
+  }, [isRecording, isRequestingPermission, processAudio]);
 
   const processAudio = useCallback(async (audioBlob) => {
     setIsProcessing(true);
@@ -881,8 +1077,20 @@ function App() {
         throw lastError || new Error('STT failed after retries');
       }
 
-      // Success! Reset consecutive failure counter
+      // Success! Reset consecutive failure counter and track WAV successes
       consecutiveFailuresRef.current = 0;
+      
+      if (captureMode === 'wav') {
+        wavSuccessCountRef.current += 1;
+        console.log(`✅ WAV success count: ${wavSuccessCountRef.current}`);
+        
+        // After 3 successful WAV recordings, try MP4 again
+        if (wavSuccessCountRef.current >= 3) {
+          console.log('🔄 Attempting to switch back to MP4 mode');
+          setCaptureMode('mp4');
+          wavSuccessCountRef.current = 0;
+        }
+      }
 
       const userText = sttData.text || '';
 
@@ -1062,15 +1270,19 @@ function App() {
         return;
       }
       
-      // Track consecutive failures for Chrome iOS encoder corruption detection
-      if (err.message.includes('STT failed') || err.message.includes('could not be decoded')) {
+      // Track consecutive failures for encoder corruption detection
+      if (err.message.includes('STT failed') || err.message.includes('could not be decoded') || err.message.includes('Invalid data found')) {
         consecutiveFailuresRef.current += 1;
-        console.warn(`⚠️ Consecutive STT failures: ${consecutiveFailuresRef.current}`);
+        wavSuccessCountRef.current = 0; // Reset WAV success counter on failure
+        console.warn(`⚠️ Consecutive failures: ${consecutiveFailuresRef.current} (mode: ${captureMode})`);
         
-        // After 2 consecutive decode failures, suggest clearing to reset encoder
-        if (consecutiveFailuresRef.current >= 2) {
-          setError('Audio encoder issue detected. Tap "Clear" button to reset and try again.');
-          console.error('🔧 Encoder likely corrupted - user should clear conversation');
+        // Switch to WAV mode after 2 consecutive failures in MP4 mode
+        if (consecutiveFailuresRef.current >= 2 && captureMode === 'mp4') {
+          console.log('🔄 Switching to WAV mode due to encoder corruption');
+          setCaptureMode('wav');
+          setError('Switched to backup audio mode. Please try recording again.');
+        } else if (captureMode === 'wav') {
+          setError('Audio processing issue. Please try recording again.');
         } else {
           setError('Audio quality issue detected. Please try recording again.');
         }
@@ -1165,8 +1377,10 @@ function App() {
     setTranslations(new Map());
     setClickedBubbles(new Set());
     ttsCache.clear();
-    consecutiveFailuresRef.current = 0; // Reset encoder failure counter
-    console.log('🔄 Conversation cleared - encoder state reset');
+    consecutiveFailuresRef.current = 0;
+    wavSuccessCountRef.current = 0;
+    setCaptureMode('mp4'); // Reset to MP4 mode
+    console.log('🔄 Conversation cleared - reset to MP4 mode');
   }, []);
 
   const handleEnableAudio = useCallback(async () => {
