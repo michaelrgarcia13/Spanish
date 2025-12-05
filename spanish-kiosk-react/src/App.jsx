@@ -907,7 +907,7 @@ function App() {
       }
       console.error('Recording error:', err);
     }
-  }, [isRecording, isProcessing, micPermissionGranted, isRequestingPermission, isCleaningUp]);
+  }, [isRecording, isProcessing, micPermissionGranted, isRequestingPermission, isCleaningUp, captureMode, createWAVBlob]);
 
   const handleButtonPress = useCallback(async (e) => {
     e?.preventDefault();
@@ -1327,7 +1327,7 @@ function App() {
       setIsProcessing(false);
       abortControllerRef.current = null;
     }
-  }, [messages]);
+  }, [messages, captureMode]);
 
   const translateText = useCallback(async (text) => {
     try {
