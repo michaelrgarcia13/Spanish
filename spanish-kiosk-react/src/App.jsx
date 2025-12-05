@@ -149,6 +149,7 @@ class TTSManager {
     this.processing = false;
     this.isResetting = false;
     this.playAbort = null;
+    this.onQueueComplete = null;
   }
 
   ensureAudioEl() {
@@ -230,6 +231,9 @@ class TTSManager {
       this.playingId = null;
       this.processing = false;
       
+      // Clear callback - auto-play was interrupted
+      this.onQueueComplete = null;
+      
       // Clear queue - recording takes priority
       while (this.queue.length > 0) {
         const item = this.queue.shift();
@@ -260,6 +264,9 @@ class TTSManager {
   clearQueue() {
     // Abort current playback if any
     this.playAbort?.abort();
+    
+    // Clear callback - queue is being cleared
+    this.onQueueComplete = null;
     
     // Revoke all queued blob URLs
     while (this.queue.length > 0) {
@@ -382,6 +389,11 @@ class TTSManager {
 
     this.processing = false;
     console.log('✅ Queue complete');
+    
+    // Notify that queue processing is complete
+    if (this.onQueueComplete) {
+      this.onQueueComplete();
+    }
   }
 
   _waitForAudioEnd(audio, signal) {
@@ -1386,6 +1398,13 @@ function App() {
         busyRef.current.isProcessing = false;
         busyRef.current.autoTTSPlaying = true;
         
+        // Set up callback to clear flag when queue completes
+        ttsManager.onQueueComplete = () => {
+          busyRef.current.autoTTSPlaying = false;
+          console.log('🎵 Auto-play complete, cleared autoTTSPlaying flag');
+          ttsManager.onQueueComplete = null;
+        };
+        
         for (const { text, messageId } of partsToPlay) {
           try {
             const response = await fetch(`${API_BASE}/tts`, {
@@ -1461,9 +1480,7 @@ function App() {
       if (currentOpIdRef.current === myOpId) {
         setIsProcessing(false);
         busyRef.current.isProcessing = false;
-        if (!ttsManager.isPlaying()) {
-          busyRef.current.autoTTSPlaying = false;
-        }
+        // autoTTSPlaying will be cleared by onQueueComplete callback
         abortControllerRef.current = null;
       }
     }
