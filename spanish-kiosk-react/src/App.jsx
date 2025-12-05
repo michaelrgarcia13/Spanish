@@ -689,6 +689,13 @@ function App() {
         
         const AudioContext = window.AudioContext || window.webkitAudioContext;
         const audioContext = new AudioContext({ sampleRate: 16000 });
+        
+        // Resume context inside user gesture (iOS requirement)
+        if (audioContext.state === 'suspended') {
+          await audioContext.resume();
+          console.log('✅ AudioContext resumed');
+        }
+        
         const source = audioContext.createMediaStreamSource(stream);
         const pcmChunks = [];
         
@@ -800,7 +807,14 @@ function App() {
               }
               
               const wavBlob = createWAVBlob(wavBuffer, 16000);
-              console.log('📦 WAV blob:', wavBlob.size, 'bytes');
+              
+              // Sanity check: header (44 bytes) + PCM data should match blob size
+              const expectedSize = 44 + (wavBuffer.length * 2);
+              if (wavBlob.size !== expectedSize) {
+                console.error('⚠️ WAV size mismatch! Expected:', expectedSize, 'Got:', wavBlob.size);
+              }
+              
+              console.log('📦 WAV blob:', wavBlob.size, 'bytes (header: 44, data:', wavBuffer.length * 2, ')');
               
               // Cleanup refs
               pcmChunks.length = 0;
@@ -983,10 +997,11 @@ function App() {
   }, [isRecording, isRequestingPermission, processAudio]);
 
   const processAudio = useCallback(async (audioBlob) => {
+    const startTime = Date.now();
     setIsProcessing(true);
     setError('');
     
-    console.log('Processing audio:', audioBlob.size, 'bytes');
+    console.log('📤 Processing audio:', audioBlob.size, 'bytes, type:', audioBlob.type, 'mode:', captureMode);
     
     // Ensure any lingering mic streams are stopped before processing
     if (currentStreamRef.current) {
@@ -1077,7 +1092,15 @@ function App() {
         throw lastError || new Error('STT failed after retries');
       }
 
-      // Success! Reset consecutive failure counter and track WAV successes
+      // Success! Log telemetry and track WAV successes
+      const roundTripMs = Date.now() - startTime;
+      console.log('✅ STT SUCCESS:', {
+        mode: captureMode,
+        blobSize: audioBlob.size,
+        roundTripMs,
+        transcription: (sttData.text || '').substring(0, 50) + ((sttData.text || '').length > 50 ? '...' : '')
+      });
+      
       consecutiveFailuresRef.current = 0;
       
       if (captureMode === 'wav') {
@@ -1086,9 +1109,10 @@ function App() {
         
         // After 3 successful WAV recordings, try MP4 again
         if (wavSuccessCountRef.current >= 3) {
-          console.log('🔄 Attempting to switch back to MP4 mode');
+          console.log('🔄 MODE SWITCH: WAV → MP4 (WAV successes:', wavSuccessCountRef.current, ')');
           setCaptureMode('mp4');
           wavSuccessCountRef.current = 0;
+          consecutiveFailuresRef.current = 0; // Reset MP4 failure counter when switching
         }
       }
 
@@ -1262,7 +1286,14 @@ function App() {
       }
 
     } catch (err) {
-      console.error('Processing error:', err);
+      const roundTripMs = Date.now() - startTime;
+      console.error('❌ STT FAILURE:', {
+        mode: captureMode,
+        blobSize: audioBlob.size,
+        roundTripMs,
+        error: err.message
+      });
+      
       busyRef.current.isProcessing = false;
       busyRef.current.autoTTSPlaying = false;
       if (err.name === 'AbortError') {
@@ -1278,8 +1309,9 @@ function App() {
         
         // Switch to WAV mode after 2 consecutive failures in MP4 mode
         if (consecutiveFailuresRef.current >= 2 && captureMode === 'mp4') {
-          console.log('🔄 Switching to WAV mode due to encoder corruption');
+          console.log('🔄 MODE SWITCH: MP4 → WAV (consecutive failures:', consecutiveFailuresRef.current, ')');
           setCaptureMode('wav');
+          wavSuccessCountRef.current = 0; // Reset WAV counter when switching
           setError('Switched to backup audio mode. Please try recording again.');
         } else if (captureMode === 'wav') {
           setError('Audio processing issue. Please try recording again.');
