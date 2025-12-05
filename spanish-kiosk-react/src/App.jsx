@@ -917,7 +917,7 @@ function App() {
     await startRecording(e);
   }, [requestMicPermissionOnce, startRecording]);
 
-  const stopRecording = useCallback((e) => {
+  const stopRecording = useCallback(async (e) => {
     e?.preventDefault();
     e?.stopPropagation();
 
