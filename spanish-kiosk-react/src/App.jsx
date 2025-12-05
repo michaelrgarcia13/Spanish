@@ -1493,10 +1493,23 @@ function App() {
       event.stopPropagation();
     }
     
-    // Guard: Block taps when busy
+    // ALWAYS reveal translation (this is just state update, not audio)
+    if (messageId) {
+      setClickedBubbles(prev => new Set(prev.add(messageId)));
+      
+      // Fetch translation if not cached
+      if (!translations.has(messageId)) {
+        const translation = await translateText(text);
+        if (translation) {
+          setTranslations(prev => new Map(prev.set(messageId, translation)));
+        }
+      }
+    }
+    
+    // Guard: Block AUDIO playback when busy, but translation still shows
     const b = busyRef.current;
     if (b.isRecording || b.isProcessing || b.autoTTSPlaying) {
-      console.log('🚫 Tap ignored (busy):', {
+      console.log('🚫 Audio blocked (busy), translation shown:', {
         isRecording: b.isRecording,
         isProcessing: b.isProcessing,
         autoTTSPlaying: b.autoTTSPlaying,
@@ -1506,10 +1519,6 @@ function App() {
     }
     
     console.log('🔊 Speak:', messageId);
-    
-    if (messageId) {
-      setClickedBubbles(prev => new Set(prev.add(messageId)));
-    }
     
     if (ttsManager.stopIfPlaying(messageId)) {
       console.log('🛑 Stopped playing');
@@ -1538,13 +1547,6 @@ function App() {
       }
     } catch (err) {
       console.error('TTS error:', err);
-    }
-    
-    if (messageId && !translations.has(messageId)) {
-      const translation = await translateText(text);
-      if (translation) {
-        setTranslations(prev => new Map(prev.set(messageId, translation)));
-      }
     }
   }, [translations, translateText]);
 
