@@ -147,6 +147,8 @@ class TTSManager {
     this.playingId = null;
     this.queue = [];
     this.processing = false;
+    this.pausedByRecording = false;
+    this.savedState = null;
   }
 
   ensureAudioEl() {
@@ -216,11 +218,43 @@ class TTSManager {
     this._process();
   }
 
+  pauseIfPlaying(options = {}) {
+    if (this.isPlaying()) {
+      this.audio.pause();
+      this.pausedByRecording = true;
+      this.savedState = {
+        playingId: this.playingId,
+        queue: [...this.queue],
+        processing: this.processing
+      };
+      console.log('⏸️ Paused TTS for', options.reason || 'unknown', '(queued:', this.queue.length, ')');
+    }
+  }
+
+  resumeIfPausedBy(reason) {
+    if (this.pausedByRecording && this.savedState) {
+      console.log('▶️ Resuming TTS after', reason);
+      this.pausedByRecording = false;
+      if (this.savedState.queue.length > 0 && !this.processing) {
+        this._process();
+      }
+      this.savedState = null;
+    }
+  }
+
   stopIfPlaying(id) {
     if (this.playingId === id && this.isPlaying()) {
+      // Treat manual stop same as natural end
       this.audio.pause();
       this.audio.currentTime = 0;
+      const wasPlaying = this.playingId;
       this.playingId = null;
+      console.log('🛑 Stopped:', wasPlaying);
+      
+      // Trigger natural end cleanup (continue queue)
+      if (this.queue.length > 0 && !this.processing) {
+        this._process();
+      }
       return true;
     }
     return false;
@@ -381,6 +415,13 @@ function MessageBubble({ text, isUser, label, onSpeak, messageId, translation, h
 }
 
 function App() {
+  // Coordination layer - shared busy state (no re-renders)
+  const busyRef = useRef({
+    isRecording: false,
+    isProcessing: false,
+    autoTTSPlaying: false
+  });
+  
   const [messages, setMessages] = useState([
     { 
       role: "assistant", 
@@ -698,6 +739,10 @@ function App() {
       }
     }
 
+    // Pause any playing TTS and claim recording lane
+    busyRef.current.isRecording = true;
+    ttsManager.pauseIfPlaying({ reason: 'recording' });
+
     await startRecording(e);
   }, [requestMicPermissionOnce, startRecording]);
 
@@ -729,6 +774,10 @@ function App() {
     }
 
     console.log('🛑 Stopping recording (duration:', recordingDuration + 'ms)');
+    
+    // Claim processing lane immediately (before async blob arrives)
+    busyRef.current.isRecording = false;
+    busyRef.current.isProcessing = true;
     setIsRecording(false);
     
     if (mediaRecorderRef.current?.state === 'recording') {
@@ -969,6 +1018,10 @@ function App() {
       if (partsToPlay.length > 0) {
         console.log('🔊 Auto-playing AI response');
         
+        // Transition from processing to auto-play
+        busyRef.current.isProcessing = false;
+        busyRef.current.autoTTSPlaying = true;
+        
         for (const { text, messageId } of partsToPlay) {
           try {
             const response = await fetch(`${API_BASE}/tts`, {
@@ -986,10 +1039,24 @@ function App() {
             console.error('Auto-play fetch error:', e);
           }
         }
+        
+        // After queue completes, resume any paused manual TTS
+        setTimeout(() => {
+          if (!ttsManager.processing) {
+            busyRef.current.autoTTSPlaying = false;
+            ttsManager.resumeIfPausedBy('recording');
+          }
+        }, 100);
+      } else {
+        // No auto-play, go straight to idle
+        busyRef.current.isProcessing = false;
+        ttsManager.resumeIfPausedBy('recording');
       }
 
     } catch (err) {
       console.error('Processing error:', err);
+      busyRef.current.isProcessing = false;
+      busyRef.current.autoTTSPlaying = false;
       if (err.name === 'AbortError') {
         console.log('Request cancelled');
         return;
@@ -1040,6 +1107,13 @@ function App() {
     if (event) {
       event.preventDefault();
       event.stopPropagation();
+    }
+    
+    // Guard: Block taps when busy
+    const b = busyRef.current;
+    if (b.isRecording || b.isProcessing || b.autoTTSPlaying) {
+      console.log('🚫 Tap ignored (busy):', b);
+      return;
     }
     
     console.log('🔊 Speak:', messageId);
