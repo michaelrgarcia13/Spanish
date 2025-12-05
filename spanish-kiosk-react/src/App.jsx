@@ -244,17 +244,26 @@ class TTSManager {
 
   stopIfPlaying(id) {
     if (this.playingId === id && this.isPlaying()) {
-      // Treat manual stop same as natural end
-      this.audio.pause();
-      this.audio.currentTime = 0;
+      // Mirror natural end cleanup
+      try {
+        this.audio.pause();
+        this.audio.currentTime = 0;
+      } catch (e) {
+        console.warn('Audio pause error:', e);
+      }
+      
       const wasPlaying = this.playingId;
       this.playingId = null;
+      this.processing = false;
       console.log('🛑 Stopped:', wasPlaying);
       
-      // Trigger natural end cleanup (continue queue)
-      if (this.queue.length > 0 && !this.processing) {
-        this._process();
-      }
+      // Immediately try to continue queued items
+      queueMicrotask(() => {
+        if (this.queue.length > 0 && !this.processing) {
+          this._process();
+        }
+      });
+      
       return true;
     }
     return false;
@@ -454,6 +463,7 @@ function App() {
   const recordingStartTimeRef = useRef(null);
   const isButtonPressedRef = useRef(false);
   const micPermissionGrantedRef = useRef(false);
+  const currentOpIdRef = useRef(0);
   const [showFirstRunScreen, setShowFirstRunScreen] = useState(false);
 
   const scrollToBottom = () => {
@@ -555,12 +565,55 @@ function App() {
   };
 
   const cancelProcessing = useCallback(() => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-      console.log('Request cancelled');
+    // Idempotent guard
+    if (!busyRef.current.isProcessing && !busyRef.current.autoTTSPlaying) {
+      setIsProcessing(false);
+      return;
     }
+
+    console.log('🛑 Cancel pressed — tearing down processing + TTS');
+
+    // 1) Immediately release coordination locks
+    busyRef.current.isProcessing = false;
+    busyRef.current.autoTTSPlaying = false;
     setIsProcessing(false);
+
+    // 2) Stop any TTS now (don't wait for ended)
+    try {
+      if (ttsManager.isPlaying()) {
+        ttsManager.audio.pause();
+        ttsManager.audio.currentTime = 0;
+        ttsManager.playingId = null;
+        ttsManager.processing = false;
+      }
+    } catch (e) {
+      console.warn('TTS stop error:', e);
+    }
+
+    // 3) Abort in-flight STT/chat request
+    try {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+    } catch (e) {
+      console.warn('Abort error:', e);
+    }
+
+    // 4) Defensive: close any mic stream
+    try {
+      if (currentStreamRef.current) {
+        currentStreamRef.current.getTracks().forEach(track => track.stop());
+        currentStreamRef.current = null;
+      }
+    } catch (e) {
+      console.warn('Stream cleanup error:', e);
+    }
+
+    // 5) Bump op id so late resolves are ignored
+    currentOpIdRef.current++;
+
     setError('');
+    console.log('✅ Cancel complete; state released:', JSON.stringify(busyRef.current));
   }, []);
 
   // Build WAV file with 44-byte header + PCM data
@@ -998,10 +1051,12 @@ function App() {
 
   const processAudio = useCallback(async (audioBlob) => {
     const startTime = Date.now();
+    const myOpId = ++currentOpIdRef.current;
+    
     setIsProcessing(true);
     setError('');
     
-    console.log('📤 Processing audio:', audioBlob.size, 'bytes, type:', audioBlob.type, 'mode:', captureMode);
+    console.log('📤 Processing audio (opId:', myOpId, '):', audioBlob.size, 'bytes, type:', audioBlob.type, 'mode:', captureMode);
     
     // Ensure any lingering mic streams are stopped before processing
     if (currentStreamRef.current) {
@@ -1094,6 +1149,13 @@ function App() {
 
       // Success! Log telemetry and track WAV successes
       const roundTripMs = Date.now() - startTime;
+      
+      // Check if operation was cancelled/superseded
+      if (currentOpIdRef.current !== myOpId) {
+        console.log('🚫 Late completion ignored (opId:', myOpId, 'vs current:', currentOpIdRef.current, ')');
+        return;
+      }
+      
       console.log('✅ STT SUCCESS:', {
         mode: captureMode,
         blobSize: audioBlob.size,
@@ -1172,6 +1234,12 @@ function App() {
       }
 
       const data = await chatResponse.json();
+      
+      // Check if operation was cancelled/superseded
+      if (currentOpIdRef.current !== myOpId) {
+        console.log('🚫 Late chat response ignored (opId:', myOpId, ')');
+        return;
+      }
       
       const assistantMessage = {
         role: 'assistant',
@@ -1281,6 +1349,13 @@ function App() {
 
     } catch (err) {
       const roundTripMs = Date.now() - startTime;
+      
+      // Ignore late errors from cancelled operations
+      if (currentOpIdRef.current !== myOpId) {
+        console.log('🚫 Late error ignored (opId:', myOpId, ')');
+        return;
+      }
+      
       console.error('❌ STT FAILURE:', {
         mode: captureMode,
         blobSize: audioBlob.size,
@@ -1318,10 +1393,15 @@ function App() {
         setError('Error processing audio. Please try again.');
       }
     } finally {
-      setIsProcessing(false);
-      busyRef.current.isProcessing = false;
-      busyRef.current.autoTTSPlaying = false;
-      abortControllerRef.current = null;
+      // Only clear flags if this is still the current operation
+      if (currentOpIdRef.current === myOpId) {
+        setIsProcessing(false);
+        busyRef.current.isProcessing = false;
+        if (!ttsManager.isPlaying()) {
+          busyRef.current.autoTTSPlaying = false;
+        }
+        abortControllerRef.current = null;
+      }
     }
   }, [messages, captureMode]);
 
