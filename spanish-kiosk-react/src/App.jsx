@@ -1272,13 +1272,7 @@ function App() {
           }
         }
         
-        // After queue completes, resume any paused manual TTS
-        setTimeout(() => {
-          if (!ttsManager.processing) {
-            busyRef.current.autoTTSPlaying = false;
-            ttsManager.resumeIfPausedBy('recording');
-          }
-        }, 100);
+        // Note: busyRef.current.autoTTSPlaying will be cleared by finally block
       } else {
         // No auto-play, go straight to idle
         busyRef.current.isProcessing = false;
@@ -1325,6 +1319,8 @@ function App() {
       }
     } finally {
       setIsProcessing(false);
+      busyRef.current.isProcessing = false;
+      busyRef.current.autoTTSPlaying = false;
       abortControllerRef.current = null;
     }
   }, [messages, captureMode]);
@@ -1356,7 +1352,12 @@ function App() {
     // Guard: Block taps when busy
     const b = busyRef.current;
     if (b.isRecording || b.isProcessing || b.autoTTSPlaying) {
-      console.log('🚫 Tap ignored (busy):', b);
+      console.log('🚫 Tap ignored (busy):', {
+        isRecording: b.isRecording,
+        isProcessing: b.isProcessing,
+        autoTTSPlaying: b.autoTTSPlaying,
+        messageId
+      });
       return;
     }
     
