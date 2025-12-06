@@ -528,6 +528,8 @@ function App() {
   const [captureMode, setCaptureMode] = useState('mp4'); // 'mp4' or 'wav'
   const [deferredPrompt, setDeferredPrompt] = useState(null);
   const [micPermissionGranted, setMicPermissionGranted] = useState(false);
+  const [appLifecycle, setAppLifecycle] = useState('ready'); // 'ready' | 'backgrounded' | 'needs-resume'
+  const isResettingRef = useRef(false);
   const [permissionRequested, setPermissionRequested] = useState(false);
   const [isRequestingPermission, setIsRequestingPermission] = useState(false);
   const [translations, setTranslations] = useState(new Map());
@@ -583,6 +585,28 @@ function App() {
         setShowFirstRunScreen(true);
       }
     }
+  }, []);
+
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        console.log('[lifecycle] -> backgrounded');
+        setAppLifecycle('backgrounded');
+        // Optional: gracefully stop any in-progress operations
+        if (busyRef.current.isRecording || busyRef.current.isProcessing) {
+          console.log('[lifecycle] Operations in progress, will need resume');
+        }
+      } else {
+        console.log('[lifecycle] -> needs-resume (coming back from background)');
+        setAppLifecycle('needs-resume');
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
   }, []);
 
   useEffect(() => {
@@ -643,6 +667,103 @@ function App() {
       });
     }
   };
+
+  const resetAudioStack = useCallback(async () => {
+    if (isResettingRef.current) {
+      console.log('[lifecycle] Already resetting, skipping');
+      return;
+    }
+
+    isResettingRef.current = true;
+    console.log('[lifecycle] 🔄 Resetting audio stack...');
+
+    try {
+      // Stop everything using existing cancel logic
+      ttsManager.beginReset();
+      ttsManager.stopIfPlaying();
+      ttsManager.clearQueue();
+      ttsManager.processing = false;
+      ttsManager.playingId = null;
+      ttsManager.onQueueComplete = null;
+
+      // Abort any in-flight requests
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+
+      // Stop microphone
+      if (currentStreamRef.current) {
+        currentStreamRef.current.getTracks().forEach(track => track.stop());
+        currentStreamRef.current = null;
+      }
+
+      // Stop MediaRecorder
+      if (mediaRecorderRef.current) {
+        try {
+          if (mediaRecorderRef.current.state === 'recording') {
+            mediaRecorderRef.current.stop();
+          }
+        } catch (e) {
+          console.warn('[lifecycle] MediaRecorder stop error:', e);
+        }
+        mediaRecorderRef.current = null;
+      }
+
+      // Reset TTS audio element
+      if (ttsManager.audio) {
+        try {
+          ttsManager.audio.pause();
+          ttsManager.audio.removeAttribute('src');
+          ttsManager.audio.remove();
+        } catch (e) {
+          console.warn('[lifecycle] TTS audio cleanup error:', e);
+        }
+        ttsManager.audio = null;
+        ttsManager.primed = false;
+      }
+
+      // Close and reset WAV AudioContext
+      if (audioContextRef.current) {
+        try {
+          await audioContextRef.current.close();
+        } catch (e) {
+          console.warn('[lifecycle] AudioContext close error:', e);
+        }
+        audioContextRef.current = null;
+        audioWorkletNodeRef.current = null;
+      }
+
+      // Reset coordination flags
+      busyRef.current.isRecording = false;
+      busyRef.current.isProcessing = false;
+      busyRef.current.autoTTSPlaying = false;
+
+      // Reset UI state
+      setIsRecording(false);
+      setIsProcessing(false);
+      setIsCleaningUp(false);
+      setError('');
+
+      // Reset counters and mode
+      consecutiveFailuresRef.current = 0;
+      wavSuccessCountRef.current = 0;
+      setCaptureMode('mp4'); // Start fresh with MP4
+
+      // Increment operation ID
+      currentOpIdRef.current++;
+
+      ttsManager.endReset();
+
+      // Mark as ready
+      setAppLifecycle('ready');
+      console.log('[lifecycle] ✅ Audio stack reset complete, ready to use');
+    } catch (e) {
+      console.error('[lifecycle] Error during reset:', e);
+      setAppLifecycle('ready'); // Still mark as ready to unblock UI
+    } finally {
+      isResettingRef.current = false;
+    }
+  }, []);
 
   const cancelProcessing = useCallback(() => {
     console.log('🛑 Cancel pressed');
@@ -774,6 +895,12 @@ function App() {
     if (e) {
       e.preventDefault();
       e.stopPropagation();
+    }
+
+    // Lifecycle guard - block if app needs resume
+    if (appLifecycle !== 'ready') {
+      console.log('[lifecycle] Blocking startRecording(), state =', appLifecycle);
+      return;
     }
 
     if (isRecording || isProcessing || isRequestingPermission || isCleaningUp) {
@@ -1036,7 +1163,7 @@ function App() {
       }
       console.error('Recording error:', err);
     }
-  }, [isRecording, isProcessing, micPermissionGranted, isRequestingPermission, isCleaningUp, captureMode]);
+  }, [isRecording, isProcessing, micPermissionGranted, isRequestingPermission, isCleaningUp, captureMode, appLifecycle]);
 
   const handleButtonPress = useCallback(async (e) => {
     e?.preventDefault();
@@ -1523,6 +1650,12 @@ function App() {
       }
     }
     
+    // Lifecycle guard - block audio if app needs resume (translation already shown)
+    if (appLifecycle !== 'ready') {
+      console.log('[lifecycle] Blocking speak() audio, state =', appLifecycle);
+      return;
+    }
+    
     // Guard: Block AUDIO playback when busy, but translation still shows
     const b = busyRef.current;
     if (b.isRecording || b.isProcessing || b.autoTTSPlaying) {
@@ -1565,7 +1698,7 @@ function App() {
     } catch (err) {
       console.error('TTS error:', err);
     }
-  }, [translations, translateText]);
+  }, [translations, translateText, appLifecycle]);
 
   const clearConversation = useCallback(() => {
     setMessages([]);
@@ -1657,6 +1790,57 @@ function App() {
               Enable Audio
             </button>
           </div>
+        </div>
+      )}
+
+      {/* Resume Banner - shown when returning from background */}
+      {appLifecycle === 'needs-resume' && (
+        <div style={{
+          position: 'fixed',
+          top: 'max(20px, env(safe-area-inset-top))',
+          left: '16px',
+          right: '16px',
+          zIndex: 9998,
+          backgroundColor: '#f59e0b',
+          borderRadius: '16px',
+          padding: '16px 20px',
+          boxShadow: '0 8px 24px rgba(0,0,0,0.2)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: '12px',
+        }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: '16px', fontWeight: '600', color: 'white', marginBottom: '4px' }}>
+              🔄 Resume Required
+            </div>
+            <div style={{ fontSize: '14px', color: 'rgba(255,255,255,0.9)' }}>
+              Tap to restart audio after backgrounding
+            </div>
+          </div>
+          <button
+            onClick={resetAudioStack}
+            style={{
+              padding: '12px 24px',
+              fontSize: '16px',
+              fontWeight: '600',
+              color: '#f59e0b',
+              backgroundColor: 'white',
+              border: 'none',
+              borderRadius: '12px',
+              cursor: 'pointer',
+              whiteSpace: 'nowrap',
+              transition: 'all 0.2s',
+            }}
+            onMouseEnter={(e) => {
+              e.target.style.transform = 'scale(1.05)';
+            }}
+            onMouseLeave={(e) => {
+              e.target.style.transform = 'scale(1)';
+            }}
+          >
+            Resume
+          </button>
         </div>
       )}
 
