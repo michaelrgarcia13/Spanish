@@ -538,6 +538,7 @@ function App() {
   const consecutiveFailuresRef = useRef(0);
   const wavSuccessCountRef = useRef(0);
 
+  const recorderRef = useRef(null); // Single-owner MediaRecorder tracking
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
   const currentStreamRef = useRef(null); // Fresh stream per recording
@@ -547,6 +548,9 @@ function App() {
   const isButtonPressedRef = useRef(false);
   const micPermissionGrantedRef = useRef(false);
   const currentOpIdRef = useRef(0);
+  const audioContextRef = useRef(null); // WAV mode AudioContext
+  const audioWorkletNodeRef = useRef(null); // WAV mode AudioWorklet
+  const workletReadyRef = useRef(false); // WAV mode initialization flag
   const [showFirstRunScreen, setShowFirstRunScreen] = useState(false);
 
   const scrollToBottom = () => {
@@ -719,14 +723,22 @@ function App() {
         console.warn('[lifecycle] Stream stop warning:', e.message || e);
       }
 
-      // Step 4: Stop MediaRecorder
+      // Step 4: Stop MediaRecorder with awaited stop
       console.log('[lifecycle] Step 4: Stopping MediaRecorder');
       try {
-        if (mediaRecorderRef.current) {
-          if (mediaRecorderRef.current.state === 'recording') {
-            mediaRecorderRef.current.stop();
+        if (recorderRef.current) {
+          if (!recorderRef.current.isWAV && recorderRef.current.state === 'recording') {
+            await stopRecorder(recorderRef.current);
             console.log('[lifecycle] MediaRecorder stopped');
+          } else if (recorderRef.current.isWAV) {
+            // WAV mode cleanup
+            if (recorderRef.current.stop) {
+              await recorderRef.current.stop();
+            }
           }
+          recorderRef.current = null;
+        }
+        if (mediaRecorderRef.current) {
           mediaRecorderRef.current = null;
         }
       } catch (e) {
@@ -748,7 +760,7 @@ function App() {
       ttsManager.audio = null;
       ttsManager.primed = false;
 
-      // Step 6: Close AudioContext with timeout
+      // Step 6: Close AudioContext with timeout and reset flags
       console.log('[lifecycle] Step 6: Closing AudioContext');
       if (audioContextRef.current) {
         try {
@@ -765,9 +777,12 @@ function App() {
         } catch (e) {
           console.warn('[lifecycle] AudioContext close warning:', e.message || e);
         }
-        audioContextRef.current = null;
-        audioWorkletNodeRef.current = null;
       }
+      // Always null out refs and flags
+      audioContextRef.current = null;
+      audioWorkletNodeRef.current = null;
+      workletReadyRef.current = false;
+      console.log('[lifecycle] AudioContext refs cleared, worklet flag reset');
 
       // Step 7: Force WAV mode (don't trust encoder after background)
       console.log('[lifecycle] Step 7: Switching to WAV mode');
@@ -815,6 +830,38 @@ function App() {
     }
   }, []);
 
+  // Helper: Wait for MediaRecorder to fully stop
+  const stopRecorder = useCallback((recorder) => {
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = () => {
+        if (!done) {
+          done = true;
+          resolve();
+        }
+      };
+
+      // Listen for both stop and final dataavailable
+      recorder.addEventListener('stop', finish, { once: true });
+      recorder.addEventListener('dataavailable', finish, { once: true });
+
+      // Trigger stop if not already stopped
+      try {
+        if (recorder.state !== 'inactive') {
+          recorder.stop();
+        } else {
+          finish(); // Already stopped
+        }
+      } catch (e) {
+        console.warn('stopRecorder error:', e.message);
+        finish();
+      }
+
+      // Timeout fuse to prevent hanging
+      setTimeout(finish, 300);
+    });
+  }, []);
+
   const cancelProcessing = useCallback(() => {
     console.log('🛑 Cancel pressed');
 
@@ -842,9 +889,17 @@ function App() {
         currentStreamRef.current = null;
       }
 
-      // 6) Stop MediaRecorder
-      if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
-        mediaRecorderRef.current.stop();
+      // 6) Stop MediaRecorder (use recorderRef)
+      if (recorderRef.current) {
+        if (recorderRef.current.isWAV && recorderRef.current.stop) {
+          recorderRef.current.stop().catch(e => console.warn('Cancel WAV stop error:', e));
+        } else if (recorderRef.current.state === 'recording') {
+          recorderRef.current.stop();
+        }
+        recorderRef.current = null;
+      }
+      if (mediaRecorderRef.current) {
+        mediaRecorderRef.current = null;
       }
     } catch (e) {
       console.error('Cancel error:', e);
@@ -953,6 +1008,12 @@ function App() {
       return;
     }
 
+    // Single-owner check - block if recorder already exists
+    if (recorderRef.current) {
+      console.log('🎤 Recorder already active - ignoring');
+      return;
+    }
+
     if (isRecording || isProcessing || isRequestingPermission || isCleaningUp) {
       console.log('🎤 Busy - ignoring (isCleaningUp:', isCleaningUp, ')');
       return;
@@ -989,20 +1050,19 @@ function App() {
       setIsRecording(true);
       recordingStartTimeRef.current = Date.now();
 
-      // WAV fallback mode: Use Web Audio API instead of MediaRecorder
+        // WAV fallback mode: Use Web Audio API instead of MediaRecorder
       if (captureMode === 'wav') {
         console.log('🎵 Using WAV capture mode (AudioWorklet/ScriptProcessor)');
         
         const AudioContext = window.AudioContext || window.webkitAudioContext;
         const audioContext = new AudioContext({ sampleRate: 16000 });
+        audioContextRef.current = audioContext; // Store for cleanup
         
         // Resume context inside user gesture (iOS requirement)
         if (audioContext.state === 'suspended') {
           await audioContext.resume();
           console.log('✅ AudioContext resumed');
-        }
-        
-        const source = audioContext.createMediaStreamSource(stream);
+        }        const source = audioContext.createMediaStreamSource(stream);
         const pcmChunks = [];
         
         let processorNode;
@@ -1074,8 +1134,8 @@ function App() {
           console.log('✅ ScriptProcessor initialized');
         }
         
-        // Store WAV cleanup function
-        mediaRecorderRef.current = {
+        // Store WAV cleanup function in recorderRef
+        const wavRecorder = {
           isWAV: true,
           audioContext,
           source,
@@ -1093,7 +1153,7 @@ function App() {
             }
             source.disconnect();
             
-            // Close context
+            // Close context (will be nulled in reset)
             await audioContext.close();
             
             // Stop stream
@@ -1131,6 +1191,9 @@ function App() {
           }
         };
         
+        recorderRef.current = wavRecorder;
+        mediaRecorderRef.current = wavRecorder; // Backward compat
+        workletReadyRef.current = true;
         console.log('🎙️ WAV recording started');
         return;
       }
@@ -1180,11 +1243,13 @@ function App() {
           currentStreamRef.current = null;
         }
         
+        // Clear recorderRef first
+        recorderRef.current = null;
+        
         // Process audio FIRST before cooldown
         if (audioChunksRef.current.length > 0) {
           const audioBlob = new Blob(audioChunksRef.current, { type: mediaRecorder.mimeType || mimeType });
           console.log('Audio blob:', audioBlob.size, 'bytes');
-          const recorderRef = mediaRecorderRef.current;
           mediaRecorderRef.current = null;
           await processAudio(audioBlob);
         } else {
@@ -1200,7 +1265,8 @@ function App() {
         setIsCleaningUp(false);
       };
 
-      mediaRecorderRef.current = mediaRecorder;
+      recorderRef.current = mediaRecorder;
+      mediaRecorderRef.current = mediaRecorder; // Backward compat
       audioChunksRef.current = [];
       mediaRecorder.start(1000);
       console.log('🎙️ Recording started');
@@ -1258,9 +1324,17 @@ function App() {
     if (recordingDuration < 800) {
       console.log('⚠️ Too short:', recordingDuration + 'ms');
       setIsRecording(false);
-      if (mediaRecorderRef.current?.state === 'recording') {
-        mediaRecorderRef.current.stop();
+      // Use recorderRef for checks
+      if (recorderRef.current?.isWAV) {
+        if (recorderRef.current.stop) {
+          await recorderRef.current.stop();
+        }
+        recorderRef.current = null;
+      } else if (recorderRef.current?.state === 'recording') {
+        await stopRecorder(recorderRef.current);
+        recorderRef.current = null;
       }
+      mediaRecorderRef.current = null;
       return;
     }
 
@@ -1271,12 +1345,13 @@ function App() {
     busyRef.current.isProcessing = true;
     setIsRecording(false);
     
-    // Handle both MediaRecorder and WAV modes
-    if (mediaRecorderRef.current?.isWAV) {
+    // Handle both MediaRecorder and WAV modes using recorderRef
+    if (recorderRef.current?.isWAV) {
       // WAV mode cleanup
       setIsCleaningUp(true);
       try {
-        const wavBlob = await mediaRecorderRef.current.stop();
+        const wavBlob = await recorderRef.current.stop();
+        recorderRef.current = null;
         mediaRecorderRef.current = null;
         
         if (wavBlob && wavBlob.size > 0) {
@@ -1295,12 +1370,13 @@ function App() {
         console.log('⏱️ WAV cool-down complete');
         setIsCleaningUp(false);
       }
-    } else if (mediaRecorderRef.current?.state === 'recording') {
-      // MP4 MediaRecorder mode
-      mediaRecorderRef.current.stop();
+    } else if (recorderRef.current?.state === 'recording') {
+      // MP4 MediaRecorder mode - use awaited stop
+      console.log('🛑 Stopping MediaRecorder');
+      await stopRecorder(recorderRef.current);
       console.log('🛑 MediaRecorder stopped');
     }
-  }, [isRecording, isRequestingPermission]);
+  }, [isRecording, isRequestingPermission, stopRecorder]);
 
   const processAudio = useCallback(async (audioBlob) => {
     const startTime = Date.now();
@@ -1653,13 +1729,13 @@ function App() {
         setError('Error processing audio. Please try again.');
       }
     } finally {
-      // Only clear flags if this is still the current operation
-      if (currentOpIdRef.current === myOpId) {
-        setIsProcessing(false);
-        busyRef.current.isProcessing = false;
-        // autoTTSPlaying will be cleared by onQueueComplete callback
-        abortControllerRef.current = null;
-      }
+      // ALWAYS clear processing flags, regardless of operation ID
+      // (autoTTSPlaying cleared by onQueueComplete callback if auto-play started)
+      setIsProcessing(false);
+      busyRef.current.isRecording = false;
+      busyRef.current.isProcessing = false;
+      // Note: autoTTSPlaying intentionally NOT cleared here - onQueueComplete handles it
+      abortControllerRef.current = null;
     }
   }, [messages, captureMode]);
 
