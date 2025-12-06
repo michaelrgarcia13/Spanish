@@ -675,93 +675,142 @@ function App() {
     }
 
     isResettingRef.current = true;
-    console.log('[lifecycle] 🔄 Resetting audio stack...');
+    ttsManager.isResetting = true;
+    console.log('[lifecycle] 🔄 Starting audio stack reset...');
 
     try {
-      // Stop everything using existing cancel logic
-      ttsManager.beginReset();
-      ttsManager.stopIfPlaying();
-      ttsManager.clearQueue();
-      ttsManager.processing = false;
-      ttsManager.playingId = null;
-      ttsManager.onQueueComplete = null;
-
-      // Abort any in-flight requests
-      if (abortControllerRef.current) {
-        abortControllerRef.current.abort();
+      // Step 1: Stop TTS playback
+      console.log('[lifecycle] Step 1: Stopping TTS playback');
+      try {
+        ttsManager.beginReset();
+        ttsManager.stopIfPlaying();
+        ttsManager.clearQueue();
+      } catch (e) {
+        console.warn('[lifecycle] TTS stop warning:', e.message || e);
       }
 
-      // Stop microphone
-      if (currentStreamRef.current) {
-        currentStreamRef.current.getTracks().forEach(track => track.stop());
-        currentStreamRef.current = null;
+      // Step 2: Abort network requests
+      console.log('[lifecycle] Step 2: Aborting network requests');
+      try {
+        if (abortControllerRef.current) {
+          abortControllerRef.current.abort();
+          abortControllerRef.current = null;
+        }
+      } catch (e) {
+        console.warn('[lifecycle] Abort controller warning:', e.message || e);
       }
 
-      // Stop MediaRecorder
-      if (mediaRecorderRef.current) {
-        try {
+      // Step 3: Stop microphone streams
+      console.log('[lifecycle] Step 3: Stopping microphone');
+      try {
+        if (currentStreamRef.current) {
+          currentStreamRef.current.getTracks().forEach(track => {
+            try {
+              track.stop();
+              console.log('[lifecycle] Stopped track:', track.id);
+            } catch (e) {
+              console.warn('[lifecycle] Track stop warning:', e.message || e);
+            }
+          });
+          currentStreamRef.current = null;
+        }
+      } catch (e) {
+        console.warn('[lifecycle] Stream stop warning:', e.message || e);
+      }
+
+      // Step 4: Stop MediaRecorder
+      console.log('[lifecycle] Step 4: Stopping MediaRecorder');
+      try {
+        if (mediaRecorderRef.current) {
           if (mediaRecorderRef.current.state === 'recording') {
             mediaRecorderRef.current.stop();
+            console.log('[lifecycle] MediaRecorder stopped');
           }
-        } catch (e) {
-          console.warn('[lifecycle] MediaRecorder stop error:', e);
+          mediaRecorderRef.current = null;
         }
-        mediaRecorderRef.current = null;
+      } catch (e) {
+        console.warn('[lifecycle] MediaRecorder stop warning:', e.message || e);
       }
 
-      // Reset TTS audio element
-      if (ttsManager.audio) {
-        try {
+      // Step 5: Destroy TTS audio element
+      console.log('[lifecycle] Step 5: Destroying TTS audio element');
+      try {
+        if (ttsManager.audio) {
           ttsManager.audio.pause();
           ttsManager.audio.removeAttribute('src');
           ttsManager.audio.remove();
-        } catch (e) {
-          console.warn('[lifecycle] TTS audio cleanup error:', e);
+          console.log('[lifecycle] TTS audio element removed');
         }
-        ttsManager.audio = null;
-        ttsManager.primed = false;
+      } catch (e) {
+        console.warn('[lifecycle] TTS audio cleanup warning:', e.message || e);
       }
+      ttsManager.audio = null;
+      ttsManager.primed = false;
 
-      // Close and reset WAV AudioContext
+      // Step 6: Close AudioContext with timeout
+      console.log('[lifecycle] Step 6: Closing AudioContext');
       if (audioContextRef.current) {
         try {
-          await audioContextRef.current.close();
+          if (audioContextRef.current.state !== 'closed') {
+            console.log('[lifecycle] AudioContext state:', audioContextRef.current.state);
+            await Promise.race([
+              audioContextRef.current.close(),
+              new Promise(resolve => setTimeout(resolve, 1000))
+            ]);
+            console.log('[lifecycle] AudioContext closed or timed out');
+          } else {
+            console.log('[lifecycle] AudioContext already closed');
+          }
         } catch (e) {
-          console.warn('[lifecycle] AudioContext close error:', e);
+          console.warn('[lifecycle] AudioContext close warning:', e.message || e);
         }
         audioContextRef.current = null;
         audioWorkletNodeRef.current = null;
       }
 
-      // Reset coordination flags
+      // Step 7: Force WAV mode (don't trust encoder after background)
+      console.log('[lifecycle] Step 7: Switching to WAV mode');
+      consecutiveFailuresRef.current = 0;
+      wavSuccessCountRef.current = 0;
+      setCaptureMode('wav');
+
+      // Step 8: Increment operation ID
+      currentOpIdRef.current++;
+      console.log('[lifecycle] Step 8: Incremented operation ID to', currentOpIdRef.current);
+
+      // Success
+      setAppLifecycle('ready');
+      console.log('[lifecycle] ✅ Audio stack reset complete (WAV mode), ready to use');
+
+    } catch (e) {
+      // Fatal error - log details and mark as error state
+      console.error('[lifecycle] ❌ Fatal reset error:', e.message || e, e.stack);
+      setAppLifecycle('ready'); // Still unblock UI, but user may need to reload
+      setError('Audio system error after resume. If issues persist, refresh the page.');
+    } finally {
+      // ALWAYS clear these flags, no matter what happened
+      console.log('[lifecycle] Cleanup: Clearing all state flags');
+      
+      // TTS state
+      ttsManager.isResetting = false;
+      ttsManager.processing = false;
+      ttsManager.playingId = null;
+      ttsManager.onQueueComplete = null;
+      
+      // Coordination flags
       busyRef.current.isRecording = false;
       busyRef.current.isProcessing = false;
       busyRef.current.autoTTSPlaying = false;
-
-      // Reset UI state
+      
+      // UI state
       setIsRecording(false);
       setIsProcessing(false);
       setIsCleaningUp(false);
-      setError('');
-
-      // Reset counters and mode
-      consecutiveFailuresRef.current = 0;
-      wavSuccessCountRef.current = 0;
-      setCaptureMode('mp4'); // Start fresh with MP4
-
-      // Increment operation ID
-      currentOpIdRef.current++;
-
-      ttsManager.endReset();
-
-      // Mark as ready
-      setAppLifecycle('ready');
-      console.log('[lifecycle] ✅ Audio stack reset complete, ready to use');
-    } catch (e) {
-      console.error('[lifecycle] Error during reset:', e);
-      setAppLifecycle('ready'); // Still mark as ready to unblock UI
-    } finally {
+      
+      // React ref
       isResettingRef.current = false;
+      
+      console.log('[lifecycle] Cleanup complete, all flags cleared');
     }
   }, []);
 
