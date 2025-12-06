@@ -196,6 +196,7 @@ class TTSManager {
   }
 
   enqueueBlob(id, blobOrUrl, fromCache = false) {
+    this.ensureAudioEl();
     console.log('➕ Enqueue:', id, fromCache ? '(cached)' : '(new)');
     
     let url;
