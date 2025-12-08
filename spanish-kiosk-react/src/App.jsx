@@ -638,6 +638,8 @@ function App() {
   const audioContextRef = useRef(null); // WAV mode AudioContext
   const audioWorkletNodeRef = useRef(null); // WAV mode AudioWorklet
   const workletReadyRef = useRef(false); // WAV mode initialization flag
+  const isAcquiringStreamRef = useRef(false); // Prevents overlapping getUserMedia calls
+  const acquireTokenRef = useRef(0); // Monotonic token to ignore late stream results
   const [showFirstRunScreen, setShowFirstRunScreen] = useState(false);
 
   const scrollToBottom = () => {
@@ -806,6 +808,8 @@ function App() {
           });
           currentStreamRef.current = null;
         }
+        // Clear acquisition flag
+        isAcquiringStreamRef.current = false;
       } catch (e) {
         console.warn('[lifecycle] Stream stop warning:', e.message || e);
       }
@@ -970,9 +974,12 @@ function App() {
         abortControllerRef.current.abort();
       }
 
-      // 5) Stop microphone
+      // 5) Stop microphone - ALL tracks
       if (currentStreamRef.current) {
-        currentStreamRef.current.getTracks().forEach(track => track.stop());
+        currentStreamRef.current.getTracks().forEach(track => {
+          track.stop();
+          console.log('🛑 Stopped track:', track.id);
+        });
         currentStreamRef.current = null;
       }
 
@@ -988,6 +995,9 @@ function App() {
       if (mediaRecorderRef.current) {
         mediaRecorderRef.current = null;
       }
+      
+      // 7) Clear acquisition flag
+      isAcquiringStreamRef.current = false;
     } catch (e) {
       console.error('Cancel error:', e);
     } finally {
@@ -1117,6 +1127,11 @@ function App() {
       setError('');
       audioChunksRef.current = [];
 
+      // Set single-flight flag and capture token
+      isAcquiringStreamRef.current = true;
+      const myToken = ++acquireTokenRef.current;
+      console.log(`🔑 Acquire token: ${myToken}`);
+
       const isiOS = /iPhone|iPad|iPod/.test(navigator.userAgent);
 
       const constraints = {
@@ -1131,6 +1146,17 @@ function App() {
       };
       
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      
+      // Check if this result is stale (another acquisition started)
+      if (acquireTokenRef.current !== myToken) {
+        console.log(`❌ Late stream (token ${myToken}), stopping immediately`);
+        stream.getTracks().forEach(track => {
+          track.stop();
+          console.log(`🛑 Stopped late track: ${track.id}`);
+        });
+        return;
+      }
+      
       currentStreamRef.current = stream;
       console.log('✅ Fresh stream acquired');
 
@@ -1395,6 +1421,9 @@ function App() {
         currentStreamRef.current = null;
       }
       console.error('Recording error:', err);
+    } finally {
+      // Always clear acquisition flag
+      isAcquiringStreamRef.current = false;
     }
   }, [isRecording, isProcessing, micPermissionGranted, isRequestingPermission, isCleaningUp, captureMode, appLifecycle]);
 
