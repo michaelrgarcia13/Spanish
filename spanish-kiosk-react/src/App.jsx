@@ -767,12 +767,23 @@ function App() {
       sessionStorage.setItem('needsResume', '1');
     };
 
+    const handlePageShow = (event) => {
+      if (event.persisted) {
+        // Page restored from BFCache (force-close scenario)
+        console.log('[lifecycle] pageshow.persisted=true -> force-close detected, forcing resume');
+        sessionStorage.setItem('needsResume', '1');
+        setAppLifecycle('needs-resume');
+      }
+    };
+
     document.addEventListener('visibilitychange', handleVisibilityChange);
     window.addEventListener('pagehide', handlePageHide);
+    window.addEventListener('pageshow', handlePageShow);
 
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('pagehide', handlePageHide);
+      window.removeEventListener('pageshow', handlePageShow);
     };
   }, []);
 
@@ -780,6 +791,18 @@ function App() {
   useEffect(() => {
     if (sessionStorage.getItem('needsResume')) {
       console.log('[lifecycle] Boot: Resume required from previous session');
+      setAppLifecycle('needs-resume');
+      return;
+    }
+
+    // Detect force-close with fresh load: if mic permission + chat history exist but no needsResume flag
+    const hasMicPermission = localStorage.getItem('micPermissionGranted') === 'true';
+    const hasChatHistory = localStorage.getItem('chatMessages');
+    
+    if (hasMicPermission && hasChatHistory) {
+      // This is a reopened PWA session after force-close (fresh load cleared sessionStorage)
+      console.log('[lifecycle] Boot: Detected force-close scenario (mic + chat exist, no resume flag) -> forcing resume');
+      sessionStorage.setItem('needsResume', '1');
       setAppLifecycle('needs-resume');
     }
   }, []);
