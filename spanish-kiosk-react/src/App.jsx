@@ -442,7 +442,24 @@ class TTSManager {
         try {
           await this.audio.play();
         } catch (playError) {
-          // Retry once with fresh audio element (iOS autoplay policy reset)
+          // Check if it's an autoplay policy error (requires user gesture)
+          if (playError.name === 'NotAllowedError') {
+            console.warn('⚠️ Autoplay blocked - requires user gesture. Setting prime flag.');
+            // Set flag to prime on next gesture
+            if (typeof window !== 'undefined' && window.needsAudioPrimeRef) {
+              window.needsAudioPrimeRef.current = { pending: true, lastMsgId: id };
+            }
+            // Clean up and break out of loop
+            revoke();
+            if (fromCache) {
+              ttsCache.markStopped(id);
+            }
+            this.playingId = null;
+            // Continue to next item or complete
+            continue;
+          }
+          
+          // For other errors, retry once with fresh audio element
           console.warn('⚠️ Play failed, recreating element and retrying:', playError.message);
           this._createAudioElement();
           this.audio.src = url;
@@ -649,7 +666,16 @@ function App() {
   const workletReadyRef = useRef(false); // WAV mode initialization flag
   const isAcquiringStreamRef = useRef(false); // Prevents overlapping getUserMedia calls
   const acquireTokenRef = useRef(0); // Monotonic token to ignore late stream results
+  const needsAudioPrimeRef = useRef({ pending: false, lastMsgId: null }); // Tracks when audio needs gesture
   const [showFirstRunScreen, setShowFirstRunScreen] = useState(false);
+
+  // Expose needsAudioPrimeRef to window for TTSManager access
+  useEffect(() => {
+    window.needsAudioPrimeRef = needsAudioPrimeRef;
+    return () => {
+      delete window.needsAudioPrimeRef;
+    };
+  }, []);
 
   // Fix #5: Persist chat messages to localStorage
   useEffect(() => {
@@ -950,7 +976,9 @@ function App() {
       // Success
       setAppLifecycle('ready');
       sessionStorage.removeItem('needsResume');
-      console.log('[lifecycle] ✅ Audio stack reset complete, ready to use');
+      // Set flag to require audio prime on next gesture
+      needsAudioPrimeRef.current = { pending: true, lastMsgId: null };
+      console.log('[lifecycle] ✅ Audio stack reset complete, ready to use (audio prime required on next gesture)');
 
     } catch (e) {
       // Fatal error - log details and mark as error state
@@ -1521,6 +1549,18 @@ function App() {
       }
     }
 
+    // Prime audio if needed (after resume or autoplay block)
+    if (needsAudioPrimeRef.current.pending) {
+      console.log('🔑 Priming audio from user gesture (record button)');
+      try {
+        await ttsManager.prime();
+        needsAudioPrimeRef.current = { pending: false, lastMsgId: null };
+        console.log('✅ Audio primed from gesture');
+      } catch (e) {
+        console.warn('⚠️ Prime from gesture failed:', e.message);
+      }
+    }
+
     // Pause any playing TTS and claim recording lane
     busyRef.current.isRecording = true;
     ttsManager.pauseIfPlaying({ reason: 'recording' });
@@ -2014,6 +2054,18 @@ function App() {
       }
     }
     
+    // Prime audio if needed (after resume or autoplay block)
+    if (needsAudioPrimeRef.current.pending) {
+      console.log('🔑 Priming audio from user gesture (bubble tap)');
+      try {
+        await ttsManager.prime();
+        needsAudioPrimeRef.current = { pending: false, lastMsgId: null };
+        console.log('✅ Audio primed from gesture');
+      } catch (e) {
+        console.warn('⚠️ Prime from gesture failed:', e.message);
+      }
+    }
+    
     // Lifecycle guard - block audio if app needs resume (translation already shown)
     if (appLifecycle !== 'ready') {
       console.log('[lifecycle] Blocking speak() audio, state =', appLifecycle);
@@ -2085,6 +2137,7 @@ function App() {
     setClickedBubbles(new Set());
     ttsCache.clear();
     localStorage.removeItem('chatMessages');
+    needsAudioPrimeRef.current = { pending: false, lastMsgId: null };
     consecutiveFailuresRef.current = 0;
     wavSuccessCountRef.current = 0;
     setCaptureMode('mp4'); // Reset to MP4 mode
