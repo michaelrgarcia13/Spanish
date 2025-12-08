@@ -439,7 +439,15 @@ class TTSManager {
 
       try {
         this.audio.src = url;
-        await this.audio.play();
+        try {
+          await this.audio.play();
+        } catch (playError) {
+          // Retry once with fresh audio element (iOS autoplay policy reset)
+          console.warn('⚠️ Play failed, recreating element and retrying:', playError.message);
+          this._createAudioElement();
+          this.audio.src = url;
+          await this.audio.play();
+        }
         
         // Increment play counter
         this.playCount++;
@@ -643,6 +651,34 @@ function App() {
   const acquireTokenRef = useRef(0); // Monotonic token to ignore late stream results
   const [showFirstRunScreen, setShowFirstRunScreen] = useState(false);
 
+  // Fix #5: Persist chat messages to localStorage
+  useEffect(() => {
+    if (messages.length > 1) { // Don't save just the initial greeting
+      try {
+        localStorage.setItem('chatMessages', JSON.stringify(messages));
+        console.log('💾 Persisted', messages.length, 'messages');
+      } catch (e) {
+        console.warn('Failed to persist messages:', e);
+      }
+    }
+  }, [messages]);
+
+  // Fix #5: Restore chat messages on mount
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('chatMessages');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setMessages(parsed);
+          console.log('📥 Restored', parsed.length, 'messages from storage');
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to restore messages:', e);
+    }
+  }, []);
+
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   };
@@ -687,6 +723,8 @@ function App() {
       if (document.hidden) {
         console.log('[lifecycle] -> backgrounded');
         setAppLifecycle('backgrounded');
+        // Persist resume requirement for next session
+        sessionStorage.setItem('needsResume', '1');
         // Optional: gracefully stop any in-progress operations
         if (busyRef.current.isRecording || busyRef.current.isProcessing) {
           console.log('[lifecycle] Operations in progress, will need resume');
@@ -694,14 +732,30 @@ function App() {
       } else {
         console.log('[lifecycle] -> needs-resume (coming back from background)');
         setAppLifecycle('needs-resume');
+        sessionStorage.setItem('needsResume', '1');
       }
     };
 
+    const handlePageHide = () => {
+      console.log('[lifecycle] pagehide -> marking needs resume');
+      sessionStorage.setItem('needsResume', '1');
+    };
+
     document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('pagehide', handlePageHide);
 
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('pagehide', handlePageHide);
     };
+  }, []);
+
+  // Fix #1 part 3: Check for persisted resume requirement on boot
+  useEffect(() => {
+    if (sessionStorage.getItem('needsResume')) {
+      console.log('[lifecycle] Boot: Resume required from previous session');
+      setAppLifecycle('needs-resume');
+    }
   }, []);
 
   useEffect(() => {
@@ -712,6 +766,14 @@ function App() {
           setMicPermissionGranted(true);
           micPermissionGrantedRef.current = true;
           console.log('Mic permission from storage');
+          // Auto-prime audio for this session (iOS requires re-prime after reload)
+          if (!showFirstRunScreen) {
+            setTimeout(() => {
+              ttsManager.prime().catch(e => {
+                console.warn('⚠️ Auto-prime failed, will retry on first gesture:', e.message);
+              });
+            }, 500);
+          }
           return;
         }
 
@@ -876,11 +938,10 @@ function App() {
       workletReadyRef.current = false;
       console.log('[lifecycle] AudioContext refs cleared, worklet flag reset');
 
-      // Step 7: Force WAV mode (don't trust encoder after background)
-      console.log('[lifecycle] Step 7: Switching to WAV mode');
+      // Step 7: Reset failure counters (keep current capture mode)
+      console.log('[lifecycle] Step 7: Resetting failure counters');
       consecutiveFailuresRef.current = 0;
       wavSuccessCountRef.current = 0;
-      setCaptureMode('wav');
 
       // Step 8: Increment operation ID
       currentOpIdRef.current++;
@@ -888,7 +949,8 @@ function App() {
 
       // Success
       setAppLifecycle('ready');
-      console.log('[lifecycle] ✅ Audio stack reset complete (WAV mode), ready to use');
+      sessionStorage.removeItem('needsResume');
+      console.log('[lifecycle] ✅ Audio stack reset complete, ready to use');
 
     } catch (e) {
       // Fatal error - log details and mark as error state
@@ -1168,9 +1230,15 @@ function App() {
       if (captureMode === 'wav') {
         console.log('🎵 Using WAV capture mode (AudioWorklet/ScriptProcessor)');
         
+        // Fix #3C: Create fresh AudioContext if needed
         const AudioContext = window.AudioContext || window.webkitAudioContext;
-        const audioContext = new AudioContext({ sampleRate: 16000 });
-        audioContextRef.current = audioContext; // Store for cleanup
+        let audioContext = audioContextRef.current;
+        
+        if (!audioContext || audioContext.state === 'closed') {
+          audioContext = new AudioContext({ sampleRate: 16000 });
+          audioContextRef.current = audioContext;
+          console.log('🎵 Created fresh AudioContext');
+        }
         
         // Resume context inside user gesture (iOS requirement)
         if (audioContext.state === 'suspended') {
@@ -1180,6 +1248,9 @@ function App() {
         
         const source = audioContext.createMediaStreamSource(stream);
         const pcmChunks = [];
+        
+        // Fix #3A: Synchronous capture flag (not React state)
+        let capturing = true;
         
         let processorNode;
         const maxDuration = 25000; // 25s cap for WAV mode
@@ -1216,15 +1287,17 @@ function App() {
             await audioContext.audioWorklet.addModule(url);
             processorNode = new AudioWorkletNode(audioContext, 'pcm-recorder-processor');
             
+            // Fix #3A: Use synchronous capturing flag
             processorNode.port.onmessage = (e) => {
-              if (isRecording && (Date.now() - startTime) < maxDuration) {
+              if (capturing && (Date.now() - startTime) < maxDuration) {
                 pcmChunks.push(e.data);
               }
             };
             
+            // Fix #3B: Connect to sink to make graph pullable
             source.connect(processorNode);
             processorNode.connect(audioContext.destination);
-            console.log('✅ AudioWorklet initialized');
+            console.log('✅ AudioWorklet initialized and connected to sink');
             URL.revokeObjectURL(url);
             
             // Set warm-up time: give worklet 100ms to stabilize
@@ -1239,8 +1312,9 @@ function App() {
         if (!useWorklet) {
           // ScriptProcessor fallback (deprecated but widely supported)
           processorNode = audioContext.createScriptProcessor(4096, 1, 1);
+          // Fix #3A: Use synchronous capturing flag
           processorNode.onaudioprocess = (e) => {
-            if (isRecording && (Date.now() - startTime) < maxDuration) {
+            if (capturing && (Date.now() - startTime) < maxDuration) {
               const inputData = e.inputBuffer.getChannelData(0);
               const pcm16 = new Int16Array(inputData.length);
               for (let i = 0; i < inputData.length; i++) {
@@ -1252,7 +1326,7 @@ function App() {
           };
           source.connect(processorNode);
           processorNode.connect(audioContext.destination);
-          console.log('✅ ScriptProcessor initialized');
+          console.log('✅ ScriptProcessor initialized and connected to sink');
           
           // Set warm-up time: give processor 100ms to stabilize
           warmupReadyTime = Date.now() + 100;
@@ -1269,6 +1343,9 @@ function App() {
           stop: async () => {
             console.log('🛑 WAV: Stopping capture...');
             
+            // Fix #3A: Stop accepting new data immediately
+            capturing = false;
+            
             // Wait for warm-up period if needed
             if (warmupReadyTime) {
               const waitMs = warmupReadyTime - Date.now();
@@ -1278,9 +1355,9 @@ function App() {
               }
             }
             
-            // If still no data after warm-up, wait a bit longer
+            // Drain window: wait for pending frames
             if (pcmChunks.length === 0) {
-              console.log('⚠️ No PCM data yet, extending capture 200ms...');
+              console.log('⚠️ No PCM data yet, waiting 200ms for pending frames...');
               await new Promise(resolve => setTimeout(resolve, 200));
             }
             
@@ -1293,8 +1370,9 @@ function App() {
             }
             source.disconnect();
             
-            // Close context (will be nulled in reset)
+            // Fix #3C: Close and null context
             await audioContext.close();
+            audioContextRef.current = null;
             
             // Stop stream
             stream.getTracks().forEach(track => {
@@ -1995,11 +2073,18 @@ function App() {
   }, [translations, translateText, appLifecycle]);
 
   const clearConversation = useCallback(() => {
-    setMessages([]);
+    const initialMessage = {
+      role: "assistant", 
+      correction_es: null,
+      reply_es: "¡Hola! 😊 Soy tu tutor de español. Dime tu nombre y cómo te sientes hoy.", 
+      needs_correction: false 
+    };
+    setMessages([initialMessage]);
     setError('');
     setTranslations(new Map());
     setClickedBubbles(new Set());
     ttsCache.clear();
+    localStorage.removeItem('chatMessages');
     consecutiveFailuresRef.current = 0;
     wavSuccessCountRef.current = 0;
     setCaptureMode('mp4'); // Reset to MP4 mode
