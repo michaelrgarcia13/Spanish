@@ -767,12 +767,23 @@ function App() {
       sessionStorage.setItem('needsResume', '1');
     };
 
+    const handlePageShow = (event) => {
+      if (event.persisted) {
+        // Page restored from BFCache (force-close + quick reopen)
+        console.log('[lifecycle] pageshow.persisted=true -> BFCache restore detected, forcing resume');
+        sessionStorage.setItem('needsResume', '1');
+        setAppLifecycle('needs-resume');
+      }
+    };
+
     document.addEventListener('visibilitychange', handleVisibilityChange);
     window.addEventListener('pagehide', handlePageHide);
+    window.addEventListener('pageshow', handlePageShow);
 
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('pagehide', handlePageHide);
+      window.removeEventListener('pageshow', handlePageShow);
     };
   }, []);
 
