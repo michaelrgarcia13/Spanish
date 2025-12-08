@@ -295,6 +295,7 @@ class TTSManager {
         ttsCache.markStopped(this.playingId);
       }
       
+      // Clear state to prevent queue re-entry
       this.playingId = null;
       this.processing = false;
       
@@ -1476,6 +1477,10 @@ function App() {
           await recorderRef.current.stop();
         }
         recorderRef.current = null;
+        // Prevent AudioContext leak on short WAV recordings
+        audioContextRef.current = null;
+        audioWorkletNodeRef.current = null;
+        workletReadyRef.current = false;
       } else if (recorderRef.current?.state === 'recording') {
         await stopRecorder(recorderRef.current);
         recorderRef.current = null;
@@ -1853,6 +1858,7 @@ function App() {
         error: err.message
       });
       
+      // Clear all busy flags on error (including autoTTSPlaying to prevent UI block)
       busyRef.current.isProcessing = false;
       busyRef.current.autoTTSPlaying = false;
       if (err.name === 'AbortError') {
