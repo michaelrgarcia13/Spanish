@@ -1149,12 +1149,15 @@ function App() {
         if (audioContext.state === 'suspended') {
           await audioContext.resume();
           console.log('✅ AudioContext resumed');
-        }        const source = audioContext.createMediaStreamSource(stream);
+        }
+        
+        const source = audioContext.createMediaStreamSource(stream);
         const pcmChunks = [];
         
         let processorNode;
         const maxDuration = 25000; // 25s cap for WAV mode
         const startTime = Date.now();
+        let warmupReadyTime = null; // Will be set after worklet/processor init
         
         // Try AudioWorklet first, fallback to ScriptProcessor
         const useWorklet = typeof AudioWorkletNode !== 'undefined' && audioContext.audioWorklet;
@@ -1196,6 +1199,10 @@ function App() {
             processorNode.connect(audioContext.destination);
             console.log('✅ AudioWorklet initialized');
             URL.revokeObjectURL(url);
+            
+            // Set warm-up time: give worklet 100ms to stabilize
+            warmupReadyTime = Date.now() + 100;
+            console.log('⏱️ WAV warm-up: 100ms');
           } catch (workletError) {
             console.warn('⚠️ AudioWorklet failed, falling back to ScriptProcessor:', workletError);
             useWorklet = false;
@@ -1219,6 +1226,10 @@ function App() {
           source.connect(processorNode);
           processorNode.connect(audioContext.destination);
           console.log('✅ ScriptProcessor initialized');
+          
+          // Set warm-up time: give processor 100ms to stabilize
+          warmupReadyTime = Date.now() + 100;
+          console.log('⏱️ WAV warm-up: 100ms');
         }
         
         // Store WAV cleanup function in recorderRef
@@ -1230,6 +1241,21 @@ function App() {
           stream,
           stop: async () => {
             console.log('🛑 WAV: Stopping capture...');
+            
+            // Wait for warm-up period if needed
+            if (warmupReadyTime) {
+              const waitMs = warmupReadyTime - Date.now();
+              if (waitMs > 0) {
+                console.log(`⏳ Waiting ${waitMs}ms for WAV warm-up...`);
+                await new Promise(resolve => setTimeout(resolve, waitMs));
+              }
+            }
+            
+            // If still no data after warm-up, wait a bit longer
+            if (pcmChunks.length === 0) {
+              console.log('⚠️ No PCM data yet, extending capture 200ms...');
+              await new Promise(resolve => setTimeout(resolve, 200));
+            }
             
             // Disconnect nodes
             if (processorNode) {
@@ -1252,6 +1278,8 @@ function App() {
             // Build WAV blob
             if (pcmChunks.length > 0) {
               const totalLength = pcmChunks.reduce((acc, arr) => acc + arr.length, 0);
+              console.log(`📊 WAV collected ${pcmChunks.length} chunks, ${totalLength} PCM samples`);
+              
               const wavBuffer = new Int16Array(totalLength);
               let offset = 0;
               for (const chunk of pcmChunks) {
@@ -1273,6 +1301,8 @@ function App() {
               pcmChunks.length = 0;
               
               return wavBlob;
+            } else {
+              console.error('❌ No WAV data captured after warm-up. Chunks:', pcmChunks.length);
             }
             return null;
           }
