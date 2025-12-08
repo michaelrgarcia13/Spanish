@@ -70,59 +70,95 @@ const API_BASE = window.__API_BASE__ || 'http://localhost:3000';
 // ---- TTS Cache with LRU Eviction (20 messages max) ----
 class TTSCache {
   constructor(maxSize = 20) {
-    this.cache = new Map(); // messageId -> { blob, url }
+    this.cache = new Map(); // messageId -> { url, byteSize, lastUsed, isPlaying }
     this.maxSize = maxSize;
-    this.playingIds = new Set(); // Track currently playing IDs to prevent eviction
+    this.totalBytes = 0;
+    this.statsCounter = 0; // Log stats every 10 operations
   }
 
   get(messageId) {
     if (this.cache.has(messageId)) {
       const entry = this.cache.get(messageId);
+      // Update LRU timestamp
+      entry.lastUsed = Date.now();
       // Move to end (most recently used)
       this.cache.delete(messageId);
       this.cache.set(messageId, entry);
       console.log('🎵 Cache HIT:', messageId);
-      return entry.url; // ✅ Return URL directly, not blob
+      this._logStats();
+      return entry.url;
     }
     console.log('🎵 Cache MISS:', messageId);
     return null;
   }
 
   set(messageId, blob) {
-    // Evict oldest if at capacity (skip if currently playing)
-    while (this.cache.size >= this.maxSize) {
-      const oldestKey = this.cache.keys().next().value;
+    const url = URL.createObjectURL(blob);
+    const entry = {
+      url,
+      byteSize: blob.size,
+      lastUsed: Date.now(),
+      isPlaying: false
+    };
+
+    // Try to evict if at capacity
+    if (this.cache.size >= this.maxSize) {
+      const victim = this._findLRUVictim();
       
-      // Skip eviction if this audio is currently playing
-      if (this.playingIds.has(oldestKey)) {
-        console.log('⏭️ Skipping eviction of playing audio:', oldestKey);
-        // Move to end to try next oldest
-        const entry = this.cache.get(oldestKey);
-        this.cache.delete(oldestKey);
-        this.cache.set(oldestKey, entry);
-        continue;
+      if (victim) {
+        // Safe to evict
+        const [victimId, victimEntry] = victim;
+        console.log('🗑️ Evicting LRU:', victimId);
+        URL.revokeObjectURL(victimEntry.url);
+        this.totalBytes -= victimEntry.byteSize;
+        this.cache.delete(victimId);
+      } else {
+        // All items are playing - use temp URL fallback
+        console.warn('⚠️ Cache full, all playing. Using temp URL:', messageId);
+        this._logStats();
+        return { url, isTemp: true }; // Return temp URL marker
       }
-      
-      const oldEntry = this.cache.get(oldestKey);
-      if (oldEntry && oldEntry.url) {
-        console.log('🗑️ Evicting oldest cache entry:', oldestKey);
-        URL.revokeObjectURL(oldEntry.url);
-      }
-      this.cache.delete(oldestKey);
-      break;
     }
     
-    const url = URL.createObjectURL(blob);
-    this.cache.set(messageId, { blob, url });
+    this.cache.set(messageId, entry);
+    this.totalBytes += entry.byteSize;
     console.log('💾 Cached TTS:', messageId, '| Cache size:', this.cache.size);
+    this._logStats();
+    return { url, isTemp: false };
   }
 
-  markPlaying(messageId) {
-    this.playingIds.add(messageId);
+  markPlaying(messageId, playing = true) {
+    const entry = this.cache.get(messageId);
+    if (entry) {
+      entry.isPlaying = playing;
+      entry.lastUsed = Date.now();
+    }
   }
 
   markStopped(messageId) {
-    this.playingIds.delete(messageId);
+    this.markPlaying(messageId, false);
+  }
+
+  _findLRUVictim() {
+    let oldest = null;
+    let oldestTime = Infinity;
+    
+    for (const [id, entry] of this.cache.entries()) {
+      if (!entry.isPlaying && entry.lastUsed < oldestTime) {
+        oldest = [id, entry];
+        oldestTime = entry.lastUsed;
+      }
+    }
+    
+    return oldest;
+  }
+
+  _logStats() {
+    this.statsCounter++;
+    if (this.statsCounter % 10 === 0) {
+      const playingCount = Array.from(this.cache.values()).filter(e => e.isPlaying).length;
+      console.log(`📊 Cache stats: ${this.cache.size}/${this.maxSize} items, ${(this.totalBytes / 1024 / 1024).toFixed(2)}MB, ${playingCount} playing`);
+    }
   }
 
   clear() {
@@ -150,15 +186,40 @@ class TTSManager {
     this.isResetting = false;
     this.playAbort = null;
     this.onQueueComplete = null;
+    this.playCount = 0; // Track plays for audio element rotation
+    this.rotateEvery = 20; // Rotate audio element every N plays
   }
 
   ensureAudioEl() {
     if (this.audio) return;
+    this._createAudioElement();
+  }
+
+  _createAudioElement() {
     console.log('🎵 Creating audio element');
-    this.audio = document.createElement('audio');
-    this.audio.setAttribute('playsinline', '');
-    this.audio.preload = 'auto';
-    document.body.appendChild(this.audio);
+    const newAudio = document.createElement('audio');
+    newAudio.setAttribute('playsinline', '');
+    newAudio.preload = 'auto';
+    
+    // Preserve settings if rotating
+    if (this.audio) {
+      newAudio.volume = this.audio.volume;
+      newAudio.muted = this.audio.muted;
+      this.audio.remove();
+    }
+    
+    document.body.appendChild(newAudio);
+    this.audio = newAudio;
+  }
+
+  _maybeRotateAudioElement() {
+    if (this.playCount > 0 && this.playCount % this.rotateEvery === 0) {
+      if (!this.isPlaying() && !this.processing) {
+        console.log('🔄 Rotating audio element (plays:', this.playCount + ')');
+        this._createAudioElement();
+        this.primed = false; // Need to re-prime after rotation
+      }
+    }
   }
 
   isPlaying() {
@@ -229,6 +290,11 @@ class TTSManager {
       this.audio.removeAttribute('src');
       this.audio.load();
       
+      // Clear playing flag in cache for current item
+      if (this.playingId) {
+        ttsCache.markStopped(this.playingId);
+      }
+      
       this.playingId = null;
       this.processing = false;
       
@@ -238,6 +304,10 @@ class TTSManager {
       // Clear queue - recording takes priority
       while (this.queue.length > 0) {
         const item = this.queue.shift();
+        // Mark as stopped in cache if it was cached
+        if (item.fromCache) {
+          ttsCache.markStopped(item.id);
+        }
         try {
           item.revoke();
         } catch (e) {}
@@ -266,12 +336,21 @@ class TTSManager {
     // Abort current playback if any
     this.playAbort?.abort();
     
+    // Clear playing flag for current item
+    if (this.playingId) {
+      ttsCache.markStopped(this.playingId);
+      this.playingId = null;
+    }
+    
     // Clear callback - queue is being cleared
     this.onQueueComplete = null;
     
-    // Revoke all queued blob URLs
+    // Revoke all queued blob URLs and clear playing flags
     while (this.queue.length > 0) {
       const item = this.queue.shift();
+      if (item.fromCache) {
+        ttsCache.markStopped(item.id);
+      }
       try {
         item.revoke();
       } catch (e) {
@@ -348,7 +427,7 @@ class TTSManager {
       this.playingId = id;
       
       if (fromCache) {
-        ttsCache.markPlaying(id);
+        ttsCache.markPlaying(id, true);
       }
       
       console.log('🔊 Playing:', id);
@@ -360,6 +439,9 @@ class TTSManager {
       try {
         this.audio.src = url;
         await this.audio.play();
+        
+        // Increment play counter
+        this.playCount++;
         
         // Wait for audio to end or be aborted
         await this._waitForAudioEnd(this.audio, this.playAbort.signal);
@@ -374,6 +456,8 @@ class TTSManager {
           console.log('⏹️ Aborted:', id);
         } else {
           console.error('❌ Playback error:', id, e);
+          // Rotate audio element on error
+          this._maybeRotateAudioElement();
         }
         revoke();
         if (fromCache) {
@@ -382,6 +466,9 @@ class TTSManager {
       } finally {
         this.playingId = null;
       }
+
+      // Check if we should rotate audio element
+      this._maybeRotateAudioElement();
 
       if (this.queue.length > 0 && !this.isResetting) {
         await new Promise(resolve => setTimeout(resolve, 200));
@@ -1668,8 +1755,16 @@ function App() {
             
             if (response.ok) {
               const blob = await response.blob();
-              ttsCache.set(messageId, blob);
-              ttsManager.enqueueBlob(messageId, blob);
+              const cacheResult = ttsCache.set(messageId, blob);
+              
+              if (cacheResult.isTemp) {
+                // Temp URL - enqueue with special handling
+                console.log('🎵 Using temp URL for:', messageId);
+                ttsManager.enqueueBlob(messageId, cacheResult.url, false);
+              } else {
+                // Cached URL - enqueue normally
+                ttsManager.enqueueBlob(messageId, cacheResult.url, true);
+              }
             }
           } catch (e) {
             console.error('Auto-play fetch error:', e);
@@ -1817,8 +1912,16 @@ function App() {
         
         if (response.ok) {
           const blob = await response.blob();
-          ttsCache.set(messageId, blob);
-          ttsManager.enqueueBlob(messageId, blob, false);
+          const cacheResult = ttsCache.set(messageId, blob);
+          
+          if (cacheResult.isTemp) {
+            // Temp URL - not cached
+            console.log('🎵 Using temp URL for:', messageId);
+            ttsManager.enqueueBlob(messageId, cacheResult.url, false);
+          } else {
+            // Cached URL
+            ttsManager.enqueueBlob(messageId, cacheResult.url, true);
+          }
         }
       }
     } catch (err) {
