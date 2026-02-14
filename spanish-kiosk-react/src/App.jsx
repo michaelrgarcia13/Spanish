@@ -168,7 +168,6 @@ class TTSCache {
       }
     });
     this.cache.clear();
-    this.playingIds.clear();
     console.log('🗑️ Cache cleared');
   }
 }
@@ -625,6 +624,9 @@ function App() {
     autoTTSPlaying: false
   });
   
+  // MIGRATION SAFEGUARD: Disabled to avoid ffmpeg dependency during Vercel migration
+  const ENABLE_AUTO_MODE_SWITCHING = false;
+  
   const [messages, setMessages] = useState([
     { 
       role: "assistant", 
@@ -639,10 +641,9 @@ function App() {
   const [isCleaningUp, setIsCleaningUp] = useState(false);
   const [error, setError] = useState('');
   const [showInstallPrompt, setShowInstallPrompt] = useState(false);
-  const [captureMode, setCaptureMode] = useState('mp4'); // 'mp4' or 'wav'
+  const [captureMode, setCaptureMode] = useState('wav'); // 'mp4' or 'wav' - default to WAV to avoid ffmpeg dependency
   const [deferredPrompt, setDeferredPrompt] = useState(null);
   const [micPermissionGranted, setMicPermissionGranted] = useState(false);
-  const [appLifecycle, setAppLifecycle] = useState('ready'); // 'ready' | 'backgrounded' | 'needs-resume'
   const isResettingRef = useRef(false);
   const [permissionRequested, setPermissionRequested] = useState(false);
   const [isRequestingPermission, setIsRequestingPermission] = useState(false);
@@ -667,6 +668,7 @@ function App() {
   const isAcquiringStreamRef = useRef(false); // Prevents overlapping getUserMedia calls
   const acquireTokenRef = useRef(0); // Monotonic token to ignore late stream results
   const needsAudioPrimeRef = useRef({ pending: false, lastMsgId: null }); // Tracks when audio needs gesture
+  const errorTimeoutRef = useRef(null); // Auto-clear error timer
   const [showFirstRunScreen, setShowFirstRunScreen] = useState(false);
 
   // Expose needsAudioPrimeRef to window for TTSManager access
@@ -744,67 +746,27 @@ function App() {
     }
   }, []);
 
+  // Simplified lifecycle: just cleanup on visibility change, no blocking
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (document.hidden) {
-        console.log('[lifecycle] -> backgrounded');
-        setAppLifecycle('backgrounded');
-        // Persist resume requirement for next session
-        sessionStorage.setItem('needsResume', '1');
-        // Optional: gracefully stop any in-progress operations
-        if (busyRef.current.isRecording || busyRef.current.isProcessing) {
-          console.log('[lifecycle] Operations in progress, will need resume');
+        console.log('[lifecycle] Backgrounded - will cleanup active streams if needed');
+        // Gracefully stop any active recording when backgrounded
+        if (busyRef.current.isRecording && currentStreamRef.current) {
+          currentStreamRef.current.getTracks().forEach(track => track.stop());
+          currentStreamRef.current = null;
+          console.log('[lifecycle] Stopped active recording stream');
         }
       } else {
-        console.log('[lifecycle] -> needs-resume (coming back from background)');
-        setAppLifecycle('needs-resume');
-        sessionStorage.setItem('needsResume', '1');
-      }
-    };
-
-    const handlePageHide = () => {
-      console.log('[lifecycle] pagehide -> marking needs resume');
-      sessionStorage.setItem('needsResume', '1');
-    };
-
-    const handlePageShow = (event) => {
-      if (event.persisted) {
-        // Page restored from BFCache (force-close scenario)
-        console.log('[lifecycle] pageshow.persisted=true -> force-close detected, forcing resume');
-        sessionStorage.setItem('needsResume', '1');
-        setAppLifecycle('needs-resume');
+        console.log('[lifecycle] Returned to foreground - ready for new recordings');
       }
     };
 
     document.addEventListener('visibilitychange', handleVisibilityChange);
-    window.addEventListener('pagehide', handlePageHide);
-    window.addEventListener('pageshow', handlePageShow);
 
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
-      window.removeEventListener('pagehide', handlePageHide);
-      window.removeEventListener('pageshow', handlePageShow);
     };
-  }, []);
-
-  // Fix #1 part 3: Check for persisted resume requirement on boot
-  useEffect(() => {
-    if (sessionStorage.getItem('needsResume')) {
-      console.log('[lifecycle] Boot: Resume required from previous session');
-      setAppLifecycle('needs-resume');
-      return;
-    }
-
-    // Detect force-close with fresh load: if mic permission + chat history exist but no needsResume flag
-    const hasMicPermission = localStorage.getItem('micPermissionGranted') === 'true';
-    const hasChatHistory = localStorage.getItem('chatMessages');
-    
-    if (hasMicPermission && hasChatHistory) {
-      // This is a reopened PWA session after force-close (fresh load cleared sessionStorage)
-      console.log('[lifecycle] Boot: Detected force-close scenario (mic + chat exist, no resume flag) -> forcing resume');
-      sessionStorage.setItem('needsResume', '1');
-      setAppLifecycle('needs-resume');
-    }
   }, []);
 
   useEffect(() => {
@@ -856,6 +818,10 @@ function App() {
           mediaRecorderRef.current.stop();
         }
         mediaRecorderRef.current = null;
+      }
+      if (errorTimeoutRef.current) {
+        clearTimeout(errorTimeoutRef.current);
+        errorTimeoutRef.current = null;
       }
       ttsCache.clear();
     };
@@ -997,7 +963,6 @@ function App() {
       console.log('[lifecycle] Step 8: Incremented operation ID to', currentOpIdRef.current);
 
       // Success
-      setAppLifecycle('ready');
       sessionStorage.removeItem('needsResume');
       // Set flag to require audio prime on next gesture
       needsAudioPrimeRef.current = { pending: true, lastMsgId: null };
@@ -1006,8 +971,7 @@ function App() {
     } catch (e) {
       // Fatal error - log details and mark as error state
       console.error('[lifecycle] ❌ Fatal reset error:', e.message || e, e.stack);
-      setAppLifecycle('ready'); // Still unblock UI, but user may need to reload
-      setError('Audio system error after resume. If issues persist, refresh the page.');
+      setError('Audio system error. If issues persist, refresh the page.');
     } finally {
       // ALWAYS clear these flags, no matter what happened
       console.log('[lifecycle] Cleanup: Clearing all state flags');
@@ -1211,12 +1175,6 @@ function App() {
     if (e) {
       e.preventDefault();
       e.stopPropagation();
-    }
-
-    // Lifecycle guard - block if app needs resume
-    if (appLifecycle !== 'ready') {
-      console.log('[lifecycle] Blocking startRecording(), state =', appLifecycle);
-      return;
     }
 
     // Single-owner check - block if recorder already exists
@@ -1507,41 +1465,50 @@ function App() {
         console.log('MediaRecorder stopped');
         setIsCleaningUp(true);
         
-        // Stop stream immediately
-        if (currentStreamRef.current) {
-          currentStreamRef.current.getTracks().forEach(track => {
-            track.stop();
-            console.log('🛑 Stopped track:', track.id);
-          });
-          currentStreamRef.current = null;
-        }
+        // Capture stream reference locally at start of onstop
+        const streamToStop = currentStreamRef.current;
+        currentStreamRef.current = null;
         
-        // Clear recorderRef first
-        recorderRef.current = null;
-        
-        // Process audio FIRST before cooldown
-        if (audioChunksRef.current.length > 0) {
-          const audioBlob = new Blob(audioChunksRef.current, { type: mediaRecorder.mimeType || mimeType });
-          console.log('Audio blob:', audioBlob.size, 'bytes');
-          mediaRecorderRef.current = null;
-          await processAudio(audioBlob);
-        } else {
-          console.log('No audio data');
+        try {
+          // Clear recorderRef first
+          recorderRef.current = null;
+          
+          // Process audio FIRST before cooldown
+          if (audioChunksRef.current.length > 0) {
+            const audioBlob = new Blob(audioChunksRef.current, { type: mediaRecorder.mimeType || mimeType });
+            console.log('Audio blob:', audioBlob.size, 'bytes');
+            mediaRecorderRef.current = null;
+            await processAudio(audioBlob);
+          } else {
+            console.log('No audio data');
+            setIsProcessing(false);
+            setError('No audio recorded. Try speaking closer to the microphone.');
+            mediaRecorderRef.current = null;
+          }
+          
+          // Cool-down period AFTER processing
+          await new Promise(resolve => setTimeout(resolve, 200));
+          console.log('⏱️ Encoder cool-down complete');
+        } catch (err) {
+          console.error('❌ onstop processing error:', err);
           setIsProcessing(false);
-          setError('No audio recorded. Try speaking closer to the microphone.');
-          mediaRecorderRef.current = null;
+          setError('Recording processing failed. Please try again.');
+        } finally {
+          // ALWAYS stop stream tracks, even if processAudio throws
+          if (streamToStop) {
+            streamToStop.getTracks().forEach(track => {
+              track.stop();
+              console.log('🛑 Stopped track:', track.id);
+            });
+          }
+          setIsCleaningUp(false);
         }
-        
-        // Cool-down period AFTER processing
-        await new Promise(resolve => setTimeout(resolve, 200));
-        console.log('⏱️ Encoder cool-down complete');
-        setIsCleaningUp(false);
       };
 
       recorderRef.current = mediaRecorder;
       mediaRecorderRef.current = mediaRecorder; // Backward compat
       audioChunksRef.current = [];
-      mediaRecorder.start(1000);
+      mediaRecorder.start(250); // 250ms timeslice for reliable chunk emission on mobile
       console.log('🎙️ Recording started');
     } catch (err) {
       setError('Error starting recording: ' + err.message);
@@ -1555,7 +1522,7 @@ function App() {
       // Always clear acquisition flag
       isAcquiringStreamRef.current = false;
     }
-  }, [isRecording, isProcessing, micPermissionGranted, isRequestingPermission, isCleaningUp, captureMode, appLifecycle]);
+  }, [isRecording, isProcessing, micPermissionGranted, isRequestingPermission, isCleaningUp, captureMode]);
 
   const handleButtonPress = useCallback(async (e) => {
     e?.preventDefault();
@@ -1609,6 +1576,8 @@ function App() {
     }
 
     const recordingDuration = Date.now() - (recordingStartTimeRef.current || 0);
+    
+    // Min duration check
     if (recordingDuration < 800) {
       console.log('⚠️ Too short:', recordingDuration + 'ms');
       setIsRecording(false);
@@ -1628,6 +1597,15 @@ function App() {
       }
       mediaRecorderRef.current = null;
       return;
+    }
+    
+    // Max duration check (Vercel 4.5MB limit protection)
+    // WAV 16kHz mono ≈ 32KB/sec → 90s ≈ 2.8MB (safe margin)
+    const MAX_RECORDING_MS = 90000; // 90 seconds
+    if (recordingDuration > MAX_RECORDING_MS) {
+      console.warn('⚠️ Max duration reached:', recordingDuration + 'ms');
+      setError('Recording ended at 90 second limit.');
+      // Will still process the recording below
     }
 
     console.log('🛑 Stopping recording (duration:', recordingDuration + 'ms)');
@@ -1696,6 +1674,17 @@ function App() {
         size: audioBlob.size,
         type: audioBlob.type || 'unknown'
       });
+      
+      // Vercel migration validation: Check size against 4.5MB limit
+      const VERCEL_SIZE_LIMIT = 4.5 * 1024 * 1024; // 4.5MB
+      const sizePercentage = ((audioBlob.size / VERCEL_SIZE_LIMIT) * 100).toFixed(1);
+      console.log(`🎯 Vercel size check: ${(audioBlob.size / 1024 / 1024).toFixed(2)}MB / 4.5MB (${sizePercentage}%)`);
+      
+      if (audioBlob.size > VERCEL_SIZE_LIMIT) {
+        console.error('⚠️ VERCEL BLOCKER: Audio exceeds 4.5MB limit!');
+        setError('Recording too long. Please keep it under 2 minutes.');
+        return;
+      }
       
       const formData = new FormData();
       
@@ -1791,7 +1780,7 @@ function App() {
         console.log(`✅ WAV success count: ${wavSuccessCountRef.current}`);
         
         // After 3 successful WAV recordings, try MP4 again
-        if (wavSuccessCountRef.current >= 3) {
+        if (ENABLE_AUTO_MODE_SWITCHING && wavSuccessCountRef.current >= 3) {
           console.log('🔄 MODE SWITCH: WAV → MP4 (WAV successes:', wavSuccessCountRef.current, ')');
           setCaptureMode('mp4');
           wavSuccessCountRef.current = 0;
@@ -1838,7 +1827,7 @@ function App() {
 
       if (signal.aborted) return;
 
-      const chatResponse = await fetch(`${API_BASE}/chat`, {
+      const chatResponse = await fetch(API_BASE && API_BASE.trim() ? `${API_BASE}/chat` : '/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
@@ -2014,7 +2003,7 @@ function App() {
         console.warn(`⚠️ Consecutive failures: ${consecutiveFailuresRef.current} (mode: ${captureMode})`);
         
         // Switch to WAV mode after 2 consecutive failures in MP4 mode
-        if (consecutiveFailuresRef.current >= 2 && captureMode === 'mp4') {
+        if (ENABLE_AUTO_MODE_SWITCHING && consecutiveFailuresRef.current >= 2 && captureMode === 'mp4') {
           console.log('🔄 MODE SWITCH: MP4 → WAV (consecutive failures:', consecutiveFailuresRef.current, ')');
           setCaptureMode('wav');
           wavSuccessCountRef.current = 0; // Reset WAV counter when switching
@@ -2029,6 +2018,15 @@ function App() {
       } else {
         setError('Error processing audio. Please try again.');
       }
+      
+      // Auto-clear error after 5 seconds to unblock UI
+      if (errorTimeoutRef.current) {
+        clearTimeout(errorTimeoutRef.current);
+      }
+      errorTimeoutRef.current = setTimeout(() => {
+        setError('');
+        errorTimeoutRef.current = null;
+      }, 5000);
     } finally {
       // ALWAYS clear processing flags, regardless of operation ID
       // (autoTTSPlaying cleared by onQueueComplete callback if auto-play started)
@@ -2077,7 +2075,7 @@ function App() {
       }
     }
     
-    // Prime audio if needed (after resume or autoplay block)
+    // Prime audio if needed (after autoplay block)
     if (needsAudioPrimeRef.current.pending) {
       console.log('🔑 Priming audio from user gesture (bubble tap)');
       try {
@@ -2087,12 +2085,6 @@ function App() {
       } catch (e) {
         console.warn('⚠️ Prime from gesture failed:', e.message);
       }
-    }
-    
-    // Lifecycle guard - block audio if app needs resume (translation already shown)
-    if (appLifecycle !== 'ready') {
-      console.log('[lifecycle] Blocking speak() audio, state =', appLifecycle);
-      return;
     }
     
     // Guard: Block AUDIO playback when busy, but translation still shows
@@ -2145,7 +2137,7 @@ function App() {
     } catch (err) {
       console.error('TTS error:', err);
     }
-  }, [translations, translateText, appLifecycle]);
+  }, [translations, translateText]);
 
   const clearConversation = useCallback(() => {
     const initialMessage = {
@@ -2163,8 +2155,10 @@ function App() {
     needsAudioPrimeRef.current = { pending: false, lastMsgId: null };
     consecutiveFailuresRef.current = 0;
     wavSuccessCountRef.current = 0;
-    setCaptureMode('mp4'); // Reset to MP4 mode
-    console.log('🔄 Conversation cleared - reset to MP4 mode');
+    if (ENABLE_AUTO_MODE_SWITCHING) {
+      setCaptureMode('mp4'); // Reset to MP4 mode
+      console.log('🔄 Conversation cleared - reset to MP4 mode');
+    }
   }, []);
 
   const handleEnableAudio = useCallback(async () => {
@@ -2245,57 +2239,6 @@ function App() {
               Enable Audio
             </button>
           </div>
-        </div>
-      )}
-
-      {/* Resume Banner - shown when returning from background */}
-      {appLifecycle === 'needs-resume' && (
-        <div style={{
-          position: 'fixed',
-          top: 'max(20px, env(safe-area-inset-top))',
-          left: '16px',
-          right: '16px',
-          zIndex: 9998,
-          backgroundColor: '#f59e0b',
-          borderRadius: '16px',
-          padding: '16px 20px',
-          boxShadow: '0 8px 24px rgba(0,0,0,0.2)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: '12px',
-        }}>
-          <div style={{ flex: 1 }}>
-            <div style={{ fontSize: '16px', fontWeight: '600', color: 'white', marginBottom: '4px' }}>
-              🔄 Resume Required
-            </div>
-            <div style={{ fontSize: '14px', color: 'rgba(255,255,255,0.9)' }}>
-              Tap to restart audio after backgrounding
-            </div>
-          </div>
-          <button
-            onClick={resetAudioStack}
-            style={{
-              padding: '12px 24px',
-              fontSize: '16px',
-              fontWeight: '600',
-              color: '#f59e0b',
-              backgroundColor: 'white',
-              border: 'none',
-              borderRadius: '12px',
-              cursor: 'pointer',
-              whiteSpace: 'nowrap',
-              transition: 'all 0.2s',
-            }}
-            onMouseEnter={(e) => {
-              e.target.style.transform = 'scale(1.05)';
-            }}
-            onMouseLeave={(e) => {
-              e.target.style.transform = 'scale(1)';
-            }}
-          >
-            Resume
-          </button>
         </div>
       )}
 
