@@ -87,8 +87,8 @@ export default async function handler(req, res) {
       console.log('Chat response:', { 
         ok: normalized.ok, 
         needs_correction: normalized.needs_correction,
-        has_correction: !!normalized.correction_es,
-        has_translation: !!normalized.translation_
+        has_correction: !!normalized.correction_es
+      });
     }
 
     return res.status(200).json(normalized);
