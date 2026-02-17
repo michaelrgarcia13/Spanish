@@ -6,35 +6,33 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { messages, translate } = req.body;
+    const { messages } = req.body;
 
     if (!messages || !Array.isArray(messages)) {
       return res.status(400).json({ error: 'Invalid messages array' });
     }
 
-    // Coerce translate to boolean
-    const shouldTranslate = !!translate;
-
-    // Concise system prompt - rely on response_format for JSON structure
+    // Spanish-only tutor system prompt
     const systemPrompt = {
       role: "system",
       content:
         "Eres un tutor de español amable para principiantes (A1–A2) con enfoque latinoamericano. " +
-        "Usa un tono cálido y motivador. RESPONDE MÁXIMO 2 MENSAJES:\n\n" +
-        "OPCIÓN 1 - Solo corrección (si hay errores significativos):\n" +
-        "- correction_es: corrección breve y amable\n" +
+        "Usa un tono cálido y motivador. RESPONDE MÁXIMO 2 MENSAJES EN ESPAÑOL:\n\n" +
+        "OPCIÓN 1 - Solo corrección (si hay errores significativos o inglés):\n" +
+        "- correction_es: Si el usuario habla en inglés, proporciona el equivalente en español (sin regañar, solo ayuda). " +
+        "Si hay errores de español, corrección breve y amable.\n" +
         "- reply_es: respuesta principal con pregunta de seguimiento\n" +
         "- needs_correction: true\n\n" +
-        "OPCIÓN 2 - Solo respuesta principal (si el español está bien):\n" +
+        "OPCIÓN 2 - Solo respuesta principal (si el español está perfecto):\n" +
         "- correction_es: null\n" +
         "- reply_es: validación + respuesta + pregunta\n" +
         "- needs_correction: false\n\n" +
-        "NO corrijas palabras en inglés intencionales (nombres propios). " +
-        "Solo corrige errores reales de español. " +
-        "Devuelve un objeto JSON con estas claves: ok, reply_es, needs_correction, correction_es, translation_en. " +
-        (shouldTranslate
-          ? "Incluye translation_en con: 'correction: [traducción]\\nreply: [traducción del reply_es]'"
-          : "Pon translation_en como null.")
+        "Reglas importantes:\n" +
+        "- SIEMPRE responde en español (reply_es y correction_es)\n" +
+        "- Si usuario usa inglés, convierte a español en correction_es (ejemplo: 'hello' → 'Intenta decir: hola')\n" +
+        "- No corrijas nombres propios\n" +
+        "- Sé amable y motivador\n" +
+        "- Devuelve JSON con: ok, reply_es, needs_correction, correction_es"
     };
 
     const allMessages = [systemPrompt, ...messages];
@@ -79,8 +77,7 @@ export default async function handler(req, res) {
       ok: parseSuccess,
       reply_es: parsed.reply_es || parsed.response || "¡Muy bien! ¿Puedes repetir eso?",
       needs_correction: !!parsed.needs_correction,
-      correction_es: parsed.correction_es || null,
-      translation_en: parsed.translation_en || null
+      correction_es: parsed.correction_es || null
     };
 
     // Log metadata only (not full content) in production
@@ -91,8 +88,7 @@ export default async function handler(req, res) {
         ok: normalized.ok, 
         needs_correction: normalized.needs_correction,
         has_correction: !!normalized.correction_es,
-        has_translation: !!normalized.translation_en
-      });
+        has_translation: !!normalized.translation_
     }
 
     return res.status(200).json(normalized);

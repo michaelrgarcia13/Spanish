@@ -1254,6 +1254,9 @@ function App() {
       return;
     }
 
+    // Cancel any playing TTS immediately - recording takes priority
+    ttsManager.pauseIfPlaying({ reason: 'recording started' });
+
     console.log('🎙️ Getting fresh stream...');
     
     try {
@@ -1889,8 +1892,7 @@ function App() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ 
-            messages: simpleHistory, 
-            translate: true
+            messages: simpleHistory
           }),
           signal
         }
@@ -1914,7 +1916,6 @@ function App() {
         role: 'assistant',
         correction_es: (data.correction_es && data.correction_es !== 'null') ? data.correction_es : null,
         reply_es: data.reply_es || '',
-        translation_en: data.translation_en,
         needs_correction: !!data.needs_correction
       };
 
@@ -1926,6 +1927,7 @@ function App() {
         const actualIndex = newMessages.length - 1;
         const userIndex = actualIndex - 1;
         
+        // Translate user message on-demand (bubble only)
         if (userIndex >= 0 && newMessages[userIndex].role === 'user') {
           const userMessageId = `user-${userIndex}`;
           const userText = newMessages[userIndex].text;
@@ -1934,37 +1936,6 @@ function App() {
               setTranslations(prev => new Map(prev.set(userMessageId, translation)));
             }
           });
-        }
-        
-        if (data.translation_en) {
-          const newTranslations = new Map();
-          const extractFromBrackets = (text) => {
-            const match = text.match(/\[(.*?)\]/);
-            return match ? match[1] : text.trim();
-          };
-          
-          if (data.correction_es && data.translation_en.includes('correction:')) {
-            const correctionLine = data.translation_en.split('correction:')[1]?.split('\n')[0]?.trim();
-            if (correctionLine) {
-              const correctionTranslation = extractFromBrackets(correctionLine);
-              newTranslations.set(`assistant-${actualIndex}-correction`, correctionTranslation);
-            }
-          }
-          if (data.reply_es && data.translation_en.includes('reply:')) {
-            const replyLine = data.translation_en.split('reply:')[1]?.trim();
-            if (replyLine) {
-              const replyTranslation = extractFromBrackets(replyLine);
-              newTranslations.set(`assistant-${actualIndex}-reply`, replyTranslation);
-            }
-          }
-          
-          if (newTranslations.size > 0) {
-            setTranslations(prev => {
-              const updated = new Map(prev);
-              newTranslations.forEach((value, key) => updated.set(key, value));
-              return updated;
-            });
-          }
         }
         
         return newMessages;
