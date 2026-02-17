@@ -67,6 +67,67 @@ if (typeof window !== 'undefined') {
 // Get API base URL from window or default to localhost for development
 const API_BASE = window.__API_BASE__ || 'http://localhost:3000';
 
+// Helper: Vercel-first fetch with smart Render fallback
+// Fallback only on network errors, 404, or 5xx (not on other 4xx)
+async function fetchWithVercelFirst(vercelPath, renderPath, options) {
+  try {
+    const response = await fetch(vercelPath, options);
+
+    if (response.ok) return response;
+
+    // Fallback only on 404 and 5xx
+    if (response.status === 404 || response.status >= 500) {
+      throw new Error(`Vercel returned ${response.status}`);
+    }
+
+    // 4xx (except 404): surface the error (no fallback)
+    return response;
+  } catch (vercelError) {
+    // Network error OR forced fallback
+    if (API_BASE && API_BASE.trim()) {
+      console.log(`⚠️ Vercel ${vercelPath} failed (${vercelError.message}), falling back to API_BASE`);
+      return await fetch(renderPath, options);
+    }
+    throw vercelError;
+  }
+}
+
+// Helper: Dual-mode STT with Vercel (raw body) + Render fallback (multipart)
+async function sendSTT(audioBlob, fileName, signal) {
+  try {
+    // Try Vercel first with raw audio body
+    const response = await fetch('/api/stt', {
+      method: 'POST',
+      headers: { 'Content-Type': audioBlob.type || 'audio/wav' },
+      body: audioBlob,
+      signal
+    });
+
+    if (response.ok) return response;
+
+    // Fallback only on 404 and 5xx
+    if (response.status === 404 || response.status >= 500) {
+      throw new Error(`Vercel STT returned ${response.status}`);
+    }
+
+    // 4xx (except 404): surface the error (no fallback)
+    return response;
+  } catch (vercelError) {
+    // Network error OR forced fallback - use Render with multipart
+    if (API_BASE && API_BASE.trim()) {
+      console.log(`⚠️ Vercel STT failed (${vercelError.message}), falling back to API_BASE with multipart`);
+      const formData = new FormData();
+      formData.append('audio', audioBlob, fileName);
+      return await fetch(`${API_BASE}/stt`, {
+        method: 'POST',
+        body: formData,
+        signal
+      });
+    }
+    throw vercelError;
+  }
+}
+
 // ---- TTS Cache with LRU Eviction (20 messages max) ----
 class TTSCache {
   constructor(maxSize = 20) {
@@ -1686,8 +1747,7 @@ function App() {
         return;
       }
       
-      const formData = new FormData();
-      
+      // Determine filename for fallback multipart upload
       let filename = 'audio.mp4';
       if (audioBlob.type.includes('webm')) {
         filename = 'audio.webm';
@@ -1698,7 +1758,6 @@ function App() {
       }
       
       console.log('📤 Sending to STT:', { filename, type: audioBlob.type });
-      formData.append('audio', audioBlob, filename);
 
       // Retry logic for STT with exponential backoff
       const maxRetries = 3;
@@ -1713,11 +1772,7 @@ function App() {
             await new Promise(resolve => setTimeout(resolve, delay));
           }
           
-          const sttResponse = await fetch(`${API_BASE}/stt`, {
-            method: 'POST',
-            body: formData,
-            signal
-          });
+          const sttResponse = await sendSTT(audioBlob, filename, signal);
 
           if (signal.aborted) return;
 
@@ -1827,15 +1882,19 @@ function App() {
 
       if (signal.aborted) return;
 
-      const chatResponse = await fetch(API_BASE && API_BASE.trim() ? `${API_BASE}/chat` : '/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          messages: simpleHistory, 
-          translate: true
-        }),
-        signal
-      });
+      const chatResponse = await fetchWithVercelFirst(
+        '/api/chat',
+        `${API_BASE}/chat`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            messages: simpleHistory, 
+            translate: true
+          }),
+          signal
+        }
+      );
 
       if (signal.aborted) return;
 
@@ -1941,11 +2000,15 @@ function App() {
         
         for (const { text, messageId } of partsToPlay) {
           try {
-            const response = await fetch(`${API_BASE}/tts`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ text })
-            });
+            const response = await fetchWithVercelFirst(
+              '/api/tts',
+              `${API_BASE}/tts`,
+              {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text })
+              }
+            );
             
             if (response.ok) {
               const blob = await response.blob();
@@ -2040,11 +2103,15 @@ function App() {
 
   const translateText = useCallback(async (text) => {
     try {
-      const response = await fetch(`${API_BASE}/api/translate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, from: 'es', to: 'en' }),
-      });
+      const response = await fetchWithVercelFirst(
+        '/api/translate',
+        `${API_BASE}/api/translate`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text, from: 'es', to: 'en' }),
+        }
+      );
       
       if (response.ok) {
         const data = await response.json();
@@ -2114,11 +2181,15 @@ function App() {
         console.log('🎵 Using cache:', messageId);
         ttsManager.enqueueBlob(messageId, cachedUrl, true);
       } else {
-        const response = await fetch(`${API_BASE}/tts`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text })
-        });
+        const response = await fetchWithVercelFirst(
+          '/api/tts',
+          `${API_BASE}/tts`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text })
+          }
+        );
         
         if (response.ok) {
           const blob = await response.blob();
