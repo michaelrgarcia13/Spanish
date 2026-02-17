@@ -56,10 +56,13 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  // Skip API calls - always go to network for fresh data
-  if (event.request.url.includes('/chat') || 
-      event.request.url.includes('/stt') || 
-      event.request.url.includes('/tts')) {
+  // Skip all API routes - always go to network for fresh data
+  if (event.request.url.includes('/api/')) {
+    return;
+  }
+
+  // Only cache GET requests (browsers can't cache POST/PUT/DELETE)
+  if (event.request.method !== 'GET') {
     return;
   }
 

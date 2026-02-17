@@ -39,9 +39,9 @@
         window.__API_BASE__ = "http://localhost:3000";
         console.log('🔧 Development mode: Using local backend');
       } else {
-        // Production mode - use deployed backend
-        window.__API_BASE__ = "https://spanish-xcs6.onrender.com";
-        console.log('🚀 Production mode: Using deployed backend');
+        // Production mode - Vercel serverless functions only
+        window.__API_BASE__ = "";
+        console.log('🚀 Production mode: Using Vercel serverless functions');
       }
       
       // Register Service Worker for PWA functionality
